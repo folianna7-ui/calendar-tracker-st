@@ -21,9 +21,16 @@
     nextDeadlineId:1,
   });
 
-  let activeTab      = 'events';
-  let _lastAutoLen   = 0;
-  let _autoScanTimer = null;
+  let activeTab        = 'events';
+  let _lastAutoLen     = 0;
+  let _autoScanTimer   = null;
+  let _collapsedMonths = {};
+
+  function extractMonth(dateStr) {
+    if (!dateStr || !dateStr.trim()) return '— Без даты';
+    const parts = dateStr.trim().split(/\s+/);
+    return parts[parts.length - 1];
+  }
 
   // ─── Context helpers ──────────────────────────────────────────────────────
 
@@ -177,21 +184,26 @@
     const loreCtx  = getLorebook();
     const existing = s.keyEvents.map(e => `[${e.date || '?'}] ${e.text}`).join('\n');
 
-    const sys = `You are a precise chronicle archivist for a roleplay story. Extract KEY EVENTS that have ALREADY HAPPENED.
+    const sys = `You are a strict chronicle archivist for a roleplay story. Extract only PLOT-CRITICAL past events.
 
-OUTPUT FORMAT — one event per line, exactly like this:
-[DATE] Very brief description (max 8 words)
+OUTPUT FORMAT — one line per DATE (consolidate all events of the same date into ONE entry):
+[DATE] Event1; Event2; Event3
 
-STRICT RULES:
-- Only past/completed events
-- Use the story world's own calendar dates (not real dates)
-- Be extremely concise — this is a timeline reminder only
-- Preserve ALL existing events listed below, only ADD new ones or correct wrong dates
-- No headers, no markdown, no commentary — ONLY the event lines
+SIGNIFICANCE RULES — only record events that:
+✓ Change power dynamics or relationships permanently (pacts, betrayals, deaths, reveals)
+✓ Involve physical conflict, injury, or life-threatening situations
+✓ Are plot turning points (major decisions, arrivals, escapes, rituals)
+✓ Reveal hidden secrets or lore (character origins, forbidden knowledge)
+✗ SKIP: casual conversations, simple "I love you" expressions, daily routine, minor emotional exchanges, small talk, repeated interactions already captured
 
-${existing ? `EXISTING EVENTS TO PRESERVE:\n${existing}` : 'No existing events yet.'}`;
+CONSOLIDATION RULES:
+- If multiple events share the same date → merge into ONE line: [DATE] Event1; Event2
+- If a date from EXISTING list appears again → UPDATE that line, do not create a duplicate
+- Preserve existing entries unless you can add something truly significant
 
-    const usr = `RECENT CHAT (last ${depth} messages):\n${chatCtx || '(empty)'}${loreCtx ? `\n\nLOREBOOK:\n${loreCtx.slice(0, 3000)}` : ''}\n\nList all key past events:`;
+${existing ? `EXISTING ENTRIES (update these, do NOT duplicate):\n${existing}` : 'No existing events yet.'}`;
+
+    const usr = `RECENT CHAT (last ${depth} messages):\n${chatCtx || '(empty)'}${loreCtx ? `\n\nLOREBOOK:\n${loreCtx.slice(0, 3000)}` : ''}\n\nOutput the complete consolidated timeline:`;
     const result = await aiGenerate(usr, sys);
     return parseEventList(result, s.nextEventId);
   }
@@ -485,9 +497,36 @@ ${past ? `ALREADY HAPPENED (do NOT include these):\n${past}` : ''}`;
 
   function buildEventsTab() {
     const s = getSettings();
-    const listHtml = s.keyEvents.length
-      ? s.keyEvents.map(function(e) { return eventRow(e, 'event'); }).join('')
-      : '<div class="calt-empty">Событий нет.<br><small>Нажмите ✦ Сканировать — AI проанализирует чат и лорбук</small></div>';
+
+    let listHtml = '';
+    if (!s.keyEvents.length) {
+      listHtml = '<div class="calt-empty">Событий нет.<br><small>Нажмите ✦ Сканировать — AI проанализирует чат и лорбук</small></div>';
+    } else {
+      // Group by month
+      const groups = {};
+      const order  = [];
+      s.keyEvents.forEach(function(e) {
+        const m = extractMonth(e.date);
+        if (!groups[m]) { groups[m] = []; order.push(m); }
+        groups[m].push(e);
+      });
+
+      order.forEach(function(month) {
+        const collapsed  = !!_collapsedMonths[month];
+        const chevron    = collapsed ? '▸' : '▾';
+        const bodyStyle  = collapsed ? 'display:none' : '';
+        listHtml += '<div class="calt-month-group" data-month="' + esc(month) + '">'
+          + '<div class="calt-month-hdr" data-month="' + esc(month) + '">'
+          + '<span class="calt-month-chev">' + chevron + '</span>'
+          + '<span class="calt-month-name">' + esc(month) + '</span>'
+          + '<span class="calt-month-count">' + groups[month].length + '</span>'
+          + '</div>'
+          + '<div class="calt-month-body" style="' + bodyStyle + '">';
+        groups[month].forEach(function(e) { listHtml += eventRow(e, 'event'); });
+        listHtml += '</div></div>';
+      });
+    }
+
     return '<div class="calt-list-wrap"><div class="calt-list" id="calt_ev_list">' + listHtml + '</div></div>'
       + '<div class="calt-add-row">'
       + '<input class="calt-add-date" id="calt_add_ev_date" placeholder="Дата">'
@@ -540,6 +579,20 @@ ${past ? `ALREADY HAPPENED (do NOT include these):\n${past}` : ''}`;
   // ─── Tab event bindings ───────────────────────────────────────────────────
 
   function bindTabEvents() {
+    // Month group toggle
+    $('.calt-month-hdr').off('click').on('click', function() {
+      const month = $(this).data('month');
+      _collapsedMonths[month] = !_collapsedMonths[month];
+      const $body = $(this).next('.calt-month-body');
+      const chev  = $(this).find('.calt-month-chev');
+      if (_collapsedMonths[month]) {
+        $body.slideUp(160);
+        chev.text('▸');
+      } else {
+        $body.slideDown(160);
+        chev.text('▾');
+      }
+    });
     // Delete
     $('.calt-ev-del').off('click').on('click', function () {
       const id = +$(this).data('id'), type = $(this).data('type');

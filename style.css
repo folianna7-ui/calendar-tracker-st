@@ -754,3 +754,52 @@
   white-space: nowrap;
   margin-left: 4px;
 }
+
+/* ── Month groups ─────────────────────────────────────────────────── */
+
+.calt-month-group {
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.calt-month-group:last-child { border-bottom: none; }
+
+.calt-month-hdr {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 10px 8px;
+  cursor: pointer;
+  user-select: none;
+  background: rgba(251,191,36,0.03);
+  transition: background 0.15s;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.calt-month-hdr:active { background: rgba(251,191,36,0.07); }
+
+.calt-month-chev {
+  font-size: 10px;
+  color: #4a5568;
+  flex-shrink: 0;
+  width: 10px;
+}
+.calt-month-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 700;
+  color: #fbbf24;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+.calt-month-count {
+  font-size: 10px;
+  font-weight: 700;
+  color: rgba(251,191,36,0.4);
+  background: rgba(251,191,36,0.07);
+  border-radius: 8px;
+  padding: 1px 7px;
+}
+
+.calt-month-body .calt-ev-row {
+  padding-left: 16px;
+}
