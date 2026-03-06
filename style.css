@@ -184,15 +184,13 @@
   to   { transform: translateY(0);    opacity: 1; }
 }
 
-/* drag handle */
-.calt-modal-inner::before {
-  content: '';
-  display: block;
+/* drag handle — rendered via JS as real element */
+.calt-drag-handle {
   width: 36px;
   height: 4px;
-  background: rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.13);
   border-radius: 2px;
-  margin: 10px auto 0;
+  margin: 10px auto 6px;
   flex-shrink: 0;
 }
 

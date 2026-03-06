@@ -404,6 +404,7 @@ ${past ? `ALREADY HAPPENED (do NOT include these):\n${past}` : ''}`;
     $('body').append(`
       <div class="calt-modal" id="calt_modal">
         <div class="calt-modal-inner">
+          <div class="calt-drag-handle"></div>
           <div class="calt-modal-hdr">
             <span class="calt-modal-icon">🗓</span>
             <span class="calt-modal-title">Calendar Tracker</span>
