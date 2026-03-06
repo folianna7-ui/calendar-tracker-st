@@ -621,6 +621,102 @@
 }
 
 /* ================================================================
+   Mobile — top panel (≤600px), same approach as Citadel Tongue fix
+   ================================================================ */
+
+@media (max-width: 600px) {
+
+  /* ── Main modal: top panel, no backdrop ── */
+  .calt-modal {
+    background: none;
+    backdrop-filter: none;
+    padding: 0;
+    align-items: flex-start;
+    justify-content: stretch;
+    top: 48px;
+    bottom: auto;
+  }
+  .calt-modal-inner {
+    border-radius: 0 0 14px 14px;
+    border-top: none;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    max-height: calc(100vh - 48px - 56px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.75);
+    animation: caltDropDown 0.2s ease-out;
+  }
+  @keyframes caltDropDown {
+    from { transform: translateY(-16px); opacity: 0; }
+    to   { transform: none; opacity: 1; }
+  }
+  .calt-drag-handle { display: none; }
+
+  /* compact header */
+  .calt-modal-hdr    { padding: 8px 10px; gap: 6px; flex-wrap: wrap; }
+  .calt-modal-title  { font-size: 13px; }
+  .calt-modal-date-wrap { flex: 1; min-width: 130px; margin-left: 0; }
+  .calt-modal-date-inp  { width: 100%; font-size: 12px; }
+  .calt-modal-x      { font-size: 18px; padding: 4px 8px; }
+
+  /* tabs */
+  .calt-tab { padding: 10px 8px; font-size: 12px; }
+
+  /* event rows */
+  .calt-ev-row { padding: 10px 6px; }
+  .calt-ev-text { font-size: 13px; }
+  .calt-ev-btn  { width: 34px; height: 34px; font-size: 14px; }
+
+  /* add row: date on its own line */
+  .calt-add-row  { flex-wrap: wrap; padding: 6px 10px; gap: 5px; }
+  .calt-add-date { width: 100%; order: 1; padding: 9px 8px; }
+  .calt-add-txt  { order: 2; flex: 1; padding: 9px 8px; font-size: 13px; }
+  .calt-add-btn  { order: 3; padding: 9px 14px; font-size: 13px; }
+
+  /* scan row */
+  .calt-scan-row { flex-wrap: wrap; padding: 5px 10px; }
+  .calt-scan-btn { font-size: 12px !important; padding: 7px 12px !important; }
+
+  /* footer */
+  .calt-modal-footer { padding: 6px 10px 12px; gap: 5px; }
+  .calt-foot-btn { font-size: 11px; padding: 8px 4px; }
+
+  /* rules tab */
+  .calt-rules-wrap { padding: 8px 10px 6px; }
+  .calt-rules-edit { font-size: 13px; min-height: 120px; }
+
+  /* ── Edit overlay: centered with overlay (small, works fine) ── */
+  .calt-edit-overlay {
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .calt-edit-box {
+    border-radius: 14px;
+    max-width: 100%;
+    width: 100%;
+    max-height: 88vh;
+    overflow-y: auto;
+    padding-bottom: 0;
+  }
+  .calt-edit-hdr   { padding: 12px 14px 10px; }
+  .calt-edit-body  { padding: 10px 14px; }
+  .calt-einput     { font-size: 15px; padding: 10px 12px; }
+  .calt-etextarea  { font-size: 14px; padding: 10px 12px; min-height: 90px; }
+  .calt-edit-footer { padding: 10px 14px 18px; }
+  .calt-edit-footer .menu_button { font-size: 14px; padding: 10px; }
+
+  /* toast: full width, no translateX centering */
+  .calt-toast {
+    left: 12px; right: 12px; width: auto;
+    transform: translateY(20px);
+    white-space: normal; bottom: 16px;
+  }
+  .calt-toast.calt-in  { transform: translateY(0); }
+  .calt-toast.calt-out { transform: translateY(20px); }
+}
+
+/* ================================================================
    Toast
    ================================================================ */
 

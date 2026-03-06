@@ -432,7 +432,9 @@ ${past ? `ALREADY HAPPENED (do NOT include these):\n${past}` : ''}`;
     $('#calt_modal').addClass('calt-mopen');
 
     $('#calt_modal_close, #calt_modal_close2').on('click', () => $('#calt_modal').removeClass('calt-mopen'));
-    $('#calt_modal').on('click', function (e) { if ($(e.target).is('#calt_modal')) $('#calt_modal').removeClass('calt-mopen'); });
+    $('#calt_modal').on('click', function (e) {
+      if ($(e.target).is('#calt_modal') && window.innerWidth > 600) $('#calt_modal').removeClass('calt-mopen');
+    });
 
     let _ddb = null;
     $('#calt_modal_date').on('input', function () {
