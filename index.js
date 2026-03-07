@@ -29,6 +29,10 @@
   function extractMonth(dateStr) {
     if (!dateStr || !dateStr.trim()) return null;
     const parts = dateStr.trim().split(/\s+/);
+    // Find the rightmost non-numeric word (skip year numbers like "1000", "301")
+    for (let i = parts.length - 1; i >= 0; i--) {
+      if (!/^\d+$/.test(parts[i])) return parts[i];
+    }
     return parts[parts.length - 1];
   }
 
@@ -765,7 +769,8 @@
       _collapsedMonths[month] = !_collapsedMonths[month];
       const $group = $(this).closest('.calt-month-group');
       const $body  = $group.find('.calt-month-body');
-      $body[$_collapsedMonths[month] ? 'slideUp' : 'slideDown'](160);
+      const action = _collapsedMonths[month] ? 'slideUp' : 'slideDown';
+      $body[action](160);
       $(this).find('.calt-month-chev').text(_collapsedMonths[month] ? '▸' : '▾');
     });
 
