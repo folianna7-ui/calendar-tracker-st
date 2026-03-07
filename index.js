@@ -867,9 +867,12 @@
   }
 
   // ─── Modal ────────────────────────────────────────────────────────────────
+  function _showModal()  { $('#calt_modal').addClass('calt-mopen').css('display','flex'); }
+  function _hideModal()  { $('#calt_modal').removeClass('calt-mopen').css('display','none'); }
+
   function openModal() {
     if ($('#calt_modal').length) {
-      $('#calt_modal').addClass('calt-mopen');
+      _showModal();
       syncModalDate(); renderTabContent(); return;
     }
 
@@ -903,12 +906,12 @@
       </div>`);
 
     syncModalDate();
-    $('#calt_modal').addClass('calt-mopen');
+    _showModal();
 
-    $('#calt_modal_close,#calt_modal_close2').on('click', () => $('#calt_modal').removeClass('calt-mopen'));
+    $('#calt_modal_close,#calt_modal_close2').on('click', () => _hideModal());
     $('#calt_modal').on('click', e => {
       if ($(e.target).is('#calt_modal') && window.innerWidth > 600)
-        $('#calt_modal').removeClass('calt-mopen');
+        _hideModal();
     });
 
     $('#calt_tabs').on('click', '.calt-tab', function() {
@@ -1153,12 +1156,14 @@
 
     function secWrap(key, icon, title, extraBtn, bodyHtml) {
       const coll = !!_collapsedSections[key];
+      // NOTE: extraBtn is placed BETWEEN header and collapsible body — always visible,
+      // never hidden when section collapses, never confused with the toggle header.
       return '<div class="calt-cfg-section">'
         + '<div class="calt-cfg-hdr calt-sec-toggle" data-sec="' + key + '">'
         + '<span class="calt-sec-chev2">' + (coll?'▸':'▾') + '</span>' + icon + ' ' + title
         + '</div>'
-        + '<div class="calt-cfg-sec-body"' + (coll ? ' style="display:none"' : '') + '>'
         + (extraBtn ? '<div class="calt-sec-add-row">' + extraBtn + '</div>' : '')
+        + '<div class="calt-cfg-sec-body"' + (coll ? ' style="display:none"' : '') + '>'
         + bodyHtml
         + '</div></div>';
     }
@@ -1469,60 +1474,73 @@
   // ─── Rules bindings ───────────────────────────────────────────────────────
   function bindRulesEvents() {
 
-    // Section collapse — single document handler, replaced each render
-    $(document).off('click.cfgsec').on('click.cfgsec', '.calt-sec-toggle', function(e) {
-      // Don't collapse when clicking add buttons or any data-rules-action inside header
+    // Section collapse — direct binding on each header (not document delegation).
+    $(document).off('click.cfgsec');
+    $('#calt_tab_body').find('.calt-sec-toggle').off('click.cfgsec').on('click.cfgsec', function(e) {
+      // Ignore clicks on action buttons inside/adjacent to header
       if ($(e.target).closest('[data-rules-action]').length) return;
       const sec = $(this).data('sec');
       _collapsedSections[sec] = !_collapsedSections[sec];
-      $(this).next('.calt-cfg-sec-body').slideToggle(160);
+      // Use closest+find — works regardless of whether add-row sits between header and body
+      $(this).closest('.calt-cfg-section').find('.calt-cfg-sec-body').slideToggle(160);
       $(this).find('.calt-sec-chev2').text(_collapsedSections[sec] ? '▸' : '▾');
     });
 
-    // Unified rules action handler — all add/del/mv via data-rules-action attribute.
-    // Old separate handlers (click.mvmth, click.mvwd, click.mvph) removed in v4.0.
-    $(document).off('click.calt_rules').on('click.calt_rules', '[data-rules-action]', function(e) {
-      e.stopPropagation();
+    // Rules action handler — bound DIRECTLY to each element (no document delegation).
+    // Document delegation was unreliable on mobile ST because ST intercepts events.
+    function _applyRulesAction(el) {
       if (!_cfgDraft) _cfgDraft = JSON.parse(JSON.stringify(getSettings().calendarConfig));
-      syncDraftFromDOM(); // capture any in-progress edits before mutating arrays
+      syncDraftFromDOM();
 
-      const action = $(this).data('rules-action');
-      const idx    = +$(this).data('idx');
-      const mi     = +$(this).data('moon');
+      const action = el.getAttribute('data-rules-action') || '';
+      const idx    = parseInt(el.getAttribute('data-idx'))  || 0;
+      const mi     = parseInt(el.getAttribute('data-moon')) || 0;
 
-      // Auto-expand the target section when an add button is clicked
+      // Auto-expand target section on add
       const sectionAutoExpand = {
         'add-month':'months', 'add-wd':'week', 'add-moon':'moons', 'add-phase':'moons',
       };
       if (sectionAutoExpand[action]) _collapsedSections[sectionAutoExpand[action]] = false;
 
-      if      (action==='add-month')                                         _cfgDraft.months.push({name:'',days:30,season:'',recurringNote:''});
-      else if (action==='del-month')                                         _cfgDraft.months.splice(idx,1);
-      else if (action==='mv-month-up' && idx>0)                             { const a=_cfgDraft.months; [a[idx],a[idx-1]]=[a[idx-1],a[idx]]; }
-      else if (action==='mv-month-dn' && idx<_cfgDraft.months.length-1)    { const a=_cfgDraft.months; [a[idx],a[idx+1]]=[a[idx+1],a[idx]]; }
-      else if (action==='add-wd')                                            _cfgDraft.weekDays.push({name:'',note:''});
-      else if (action==='del-wd')                                            _cfgDraft.weekDays.splice(idx,1);
-      else if (action==='mv-wd-up' && idx>0)                                { const a=_cfgDraft.weekDays; [a[idx],a[idx-1]]=[a[idx-1],a[idx]]; }
-      else if (action==='mv-wd-dn' && idx<_cfgDraft.weekDays.length-1)     { const a=_cfgDraft.weekDays; [a[idx],a[idx+1]]=[a[idx+1],a[idx]]; }
-      else if (action==='add-moon')                                          _cfgDraft.moons.push({name:'',nickname:'',cycleDays:28,refDate:'',refPhaseIndex:0,phases:[]});
-      else if (action==='del-moon')                                          _cfgDraft.moons.splice(mi,1);
-      else if (action==='add-phase' && _cfgDraft.moons[mi])                 _cfgDraft.moons[mi].phases.push({name:'',days:7,note:''});
-      else if (action==='del-phase' && _cfgDraft.moons[mi])                 { const pi=+$(this).data('idx'); _cfgDraft.moons[mi].phases.splice(pi,1); }
-      else if (action==='mv-ph-up'  && _cfgDraft.moons[mi])                { const pi=+$(this).data('idx'),a=_cfgDraft.moons[mi].phases; if(pi>0) [a[pi],a[pi-1]]=[a[pi-1],a[pi]]; }
-      else if (action==='mv-ph-dn'  && _cfgDraft.moons[mi])                { const pi=+$(this).data('idx'),a=_cfgDraft.moons[mi].phases; if(pi<a.length-1) [a[pi],a[pi+1]]=[a[pi+1],a[pi]]; }
-      else return; // unknown action — don't re-render
+      if      (action==='add-month')                                        { _cfgDraft.months.push({name:'',days:30,season:'',recurringNote:''}); }
+      else if (action==='del-month')                                        { _cfgDraft.months.splice(idx,1); }
+      else if (action==='mv-month-up' && idx>0)                            { const a=_cfgDraft.months; [a[idx],a[idx-1]]=[a[idx-1],a[idx]]; }
+      else if (action==='mv-month-dn' && idx<_cfgDraft.months.length-1)   { const a=_cfgDraft.months; [a[idx],a[idx+1]]=[a[idx+1],a[idx]]; }
+      else if (action==='add-wd')                                           { _cfgDraft.weekDays.push({name:'',note:''}); }
+      else if (action==='del-wd')                                           { _cfgDraft.weekDays.splice(idx,1); }
+      else if (action==='mv-wd-up' && idx>0)                               { const a=_cfgDraft.weekDays; [a[idx],a[idx-1]]=[a[idx-1],a[idx]]; }
+      else if (action==='mv-wd-dn' && idx<_cfgDraft.weekDays.length-1)    { const a=_cfgDraft.weekDays; [a[idx],a[idx+1]]=[a[idx+1],a[idx]]; }
+      else if (action==='add-moon')                                         { _cfgDraft.moons.push({name:'',nickname:'',cycleDays:28,refDate:'',refPhaseIndex:0,phases:[]}); }
+      else if (action==='del-moon')                                         { _cfgDraft.moons.splice(mi,1); }
+      else if (action==='add-phase' && _cfgDraft.moons[mi])                { _cfgDraft.moons[mi].phases.push({name:'',days:7,note:''}); }
+      else if (action==='del-phase' && _cfgDraft.moons[mi])                { const pi=parseInt(el.getAttribute('data-idx'))||0; _cfgDraft.moons[mi].phases.splice(pi,1); }
+      else if (action==='mv-ph-up'  && _cfgDraft.moons[mi])               { const pi=parseInt(el.getAttribute('data-idx'))||0, a=_cfgDraft.moons[mi].phases; if(pi>0) [a[pi],a[pi-1]]=[a[pi-1],a[pi]]; }
+      else if (action==='mv-ph-dn'  && _cfgDraft.moons[mi])               { const pi=parseInt(el.getAttribute('data-idx'))||0, a=_cfgDraft.moons[mi].phases; if(pi<a.length-1) [a[pi],a[pi+1]]=[a[pi+1],a[pi]]; }
+      else return;
 
-      saveDraftToSession(); // immediate write on structural changes
+      saveDraftToSession();
       renderTabContent();
+    }
+
+    // Bind directly to every [data-rules-action] element now in the DOM.
+    // This is reliable on all platforms — no document delegation, no bubbling required.
+    $('#calt_tab_body').find('[data-rules-action]').each(function() {
+      $(this).off('click.calt_rules').on('click.calt_rules', function(e) {
+        e.stopPropagation();
+        _applyRulesAction(this);
+      });
     });
 
-    // Mark dirty + sync on any text input change
-    $(document).off('input.cfgdirty').on('input.cfgdirty',
+    // Also remove any stale document delegation to avoid double-firing on desktop.
+    $(document).off('click.calt_rules');
+
+    // Input → sync draft (direct binding, same elements)
+    $('#calt_tab_body').find(
       '.calt-cfg-inp-sm,.calt-cfg-inp-lg,.calt-cfg-inp-xs,.calt-cfg-sel,' +
       '.calt-moon-name,.calt-moon-nickname,.calt-moon-cycle,.calt-moon-ref-date,.calt-moon-ref-phase,' +
-      '#calt_rules_edit',
-      () => { syncDraftFromDOM(); }
-    );
+      '#calt_rules_edit'
+    ).off('input.cfgdirty').on('input.cfgdirty', () => { syncDraftFromDOM(); });
+    $(document).off('input.cfgdirty');
 
     // Save rules
     $('#calt_rules_save_btn').off('click').on('click', async () => {
@@ -1755,14 +1773,14 @@
         }
         if (changed) {
           save(); updatePrompt(); updateMeta();
-          if ($('#calt_modal').hasClass('calt-mopen')) renderTabContent();
+          if ($('#calt_modal').is(':visible')) renderTabContent();
           toast('Таймлайн обновлён автоматически', '#34d399', () => {
             s.keyEvents  = JSON.parse(evSnap);
             s.deadlines  = JSON.parse(dlSnap);
             s.nextEventId    = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
             s.nextDeadlineId = Math.max(0, ...s.deadlines.map(e => e.id||0)) + 1;
             save(); updatePrompt(); updateMeta();
-            if ($('#calt_modal').hasClass('calt-mopen')) renderTabContent();
+            if ($('#calt_modal').is(':visible')) renderTabContent();
           });
         }
       } catch(e) { console.warn('[CalTracker] autoscan error:', e.message); }
@@ -1781,7 +1799,7 @@
       _lastAutoLen = 0; _collapsedMonths = {}; _searchQuery = ''; _tagFilter = null;
       _cfgDraft = null; _cfgDirty = false; clearDraftFromSession();
       refreshSettingsUi(); await updatePrompt();
-      if ($('#calt_modal').hasClass('calt-mopen')) {
+      if ($('#calt_modal').is(':visible')) {
         syncModalDate(); // rebuild dropdown for new chat's calendarConfig
         renderTabContent();
       }
@@ -1799,7 +1817,7 @@
     $(document).on('keydown.calt', e => {
       if (e.altKey && e.key.toLowerCase() === 't') {
         e.preventDefault();
-        if ($('#calt_modal').hasClass('calt-mopen')) $('#calt_modal').removeClass('calt-mopen');
+        if ($('#calt_modal').is(':visible')) _hideModal();
         else openModal();
       }
     });
