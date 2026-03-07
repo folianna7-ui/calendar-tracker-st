@@ -1,5 +1,5 @@
 /* ================================================================
-   Calendar Tracker v3.0 — Style Sheet
+   Calendar Tracker v4.0 — Style Sheet
    ================================================================ */
 
 /* ── Settings panel ─────────────────────────────────────────── */
@@ -418,4 +418,33 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-sec-add-row {
   padding:6px 12px;
   border-bottom:1px solid rgba(255,255,255,0.04);
+}
+
+/* ── v4.0: Prompt active dot ────────────────────────────────── */
+.calt-prompt-dot {
+  font-size:10px; flex-shrink:0; transition:color 0.3s;
+  cursor:default; margin-left:2px;
+}
+
+/* ── v4.0: Rules tab dirty badge ────────────────────────────── */
+.calt-tab-dirty::after {
+  content:'●'; font-size:8px; color:#fbbf24;
+  margin-left:4px; vertical-align:top; line-height:1.6;
+}
+
+/* ── v4.0: Inline draft hint in Rules footer ────────────────── */
+.calt-draft-hint {
+  font-size:11px; color:#f59e0b; align-self:center;
+  flex-shrink:0; animation:calt-fadein 0.3s ease;
+}
+@keyframes calt-fadein { from{opacity:0} to{opacity:1} }
+
+/* ── v4.0: Clear button in footer ───────────────────────────── */
+.calt-foot-clear {
+  background:rgba(248,113,113,0.08) !important;
+  border-color:rgba(248,113,113,0.2) !important;
+  color:#f87171 !important; flex:0 0 auto !important;
+}
+.calt-foot-clear:hover {
+  background:rgba(248,113,113,0.18) !important;
 }
