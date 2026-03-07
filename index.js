@@ -1144,12 +1144,21 @@
   function buildRulesTab() {
     // Priority: in-memory draft → sessionStorage draft → fresh copy from settings
     if (!_cfgDraft) {
-      const restored = loadDraftFromSession();
-      _cfgDraft = restored || JSON.parse(JSON.stringify(getSettings().calendarConfig));
-      if (restored) {
+      const saved     = getSettings().calendarConfig;
+      const restored  = loadDraftFromSession();
+      // Only use restored draft if it has at least as much data as saved settings.
+      // A draft with fewer months/weekdays is stale and would overwrite good data.
+      const draftOk = restored &&
+        (restored.months||[]).length  >= (saved.months||[]).length &&
+        (restored.weekDays||[]).length >= (saved.weekDays||[]).length;
+      if (draftOk) {
+        _cfgDraft = restored;
         _cfgDirty = true;
         updateDirtyBadge();
         setTimeout(() => toast('Черновик правил восстановлен после перезагрузки', '#a78bfa'), 300);
+      } else {
+        if (restored) clearDraftFromSession(); // discard stale draft
+        _cfgDraft = JSON.parse(JSON.stringify(saved));
       }
     }
     const cc = _cfgDraft;
@@ -1489,8 +1498,10 @@
     // Rules action handler — bound DIRECTLY to each element (no document delegation).
     // Document delegation was unreliable on mobile ST because ST intercepts events.
     function _applyRulesAction(el) {
+      // Do NOT call syncDraftFromDOM() here — input handlers already keep
+      // _cfgDraft current. Calling it here would overwrite _cfgDraft with whatever
+      // empty values are currently in DOM if the section was stale.
       if (!_cfgDraft) _cfgDraft = JSON.parse(JSON.stringify(getSettings().calendarConfig));
-      syncDraftFromDOM();
 
       const action = el.getAttribute('data-rules-action') || '';
       const idx    = parseInt(el.getAttribute('data-idx'))  || 0;
@@ -1522,25 +1533,27 @@
       renderTabContent();
     }
 
-    // Bind directly to every [data-rules-action] element now in the DOM.
-    // This is reliable on all platforms — no document delegation, no bubbling required.
-    $('#calt_tab_body').find('[data-rules-action]').each(function() {
-      $(this).off('click.calt_rules').on('click.calt_rules', function(e) {
+    // Delegate on #calt_tab_body — our own container.
+    // More reliable than document delegation (ST can intercept at document level)
+    // and more reliable than direct binding (no stopPropagation issues).
+    $(document).off('click.calt_rules');
+    $('#calt_tab_body')
+      .off('click.calt_rules')
+      .on('click.calt_rules', '[data-rules-action]', function(e) {
         e.stopPropagation();
         _applyRulesAction(this);
       });
-    });
 
-    // Also remove any stale document delegation to avoid double-firing on desktop.
-    $(document).off('click.calt_rules');
-
-    // Input → sync draft (direct binding, same elements)
-    $('#calt_tab_body').find(
-      '.calt-cfg-inp-sm,.calt-cfg-inp-lg,.calt-cfg-inp-xs,.calt-cfg-sel,' +
-      '.calt-moon-name,.calt-moon-nickname,.calt-moon-cycle,.calt-moon-ref-date,.calt-moon-ref-phase,' +
-      '#calt_rules_edit'
-    ).off('input.cfgdirty').on('input.cfgdirty', () => { syncDraftFromDOM(); });
+    // Input → sync draft (delegate on same container)
     $(document).off('input.cfgdirty');
+    $('#calt_tab_body')
+      .off('input.cfgdirty')
+      .on('input.cfgdirty',
+        '.calt-cfg-inp-sm,.calt-cfg-inp-lg,.calt-cfg-inp-xs,.calt-cfg-sel,' +
+        '.calt-moon-name,.calt-moon-nickname,.calt-moon-cycle,.calt-moon-ref-date,.calt-moon-ref-phase,' +
+        '#calt_rules_edit',
+        () => { syncDraftFromDOM(); }
+      );
 
     // Save rules
     $('#calt_rules_save_btn').off('click').on('click', async () => {
