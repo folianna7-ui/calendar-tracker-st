@@ -755,7 +755,11 @@
   margin-left: 4px;
 }
 
-/* ── Month groups ─────────────────────────────────────────────────── */
+/* ================================================================
+   v2.0 additions
+   ================================================================ */
+
+/* ── Month groups ────────────────────────────────────────────────── */
 
 .calt-month-group {
   border-bottom: 1px solid rgba(255,255,255,0.04);
@@ -765,41 +769,111 @@
 .calt-month-hdr {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
   padding: 9px 10px 8px;
   cursor: pointer;
   user-select: none;
-  background: rgba(251,191,36,0.03);
+  background: rgba(251,191,36,0.025);
+  position: sticky; top: 0; z-index: 1;
   transition: background 0.15s;
-  position: sticky;
-  top: 0;
-  z-index: 1;
 }
-.calt-month-hdr:active { background: rgba(251,191,36,0.07); }
+.calt-month-hdr:active { background: rgba(251,191,36,0.06); }
 
-.calt-month-chev {
-  font-size: 10px;
-  color: #4a5568;
-  flex-shrink: 0;
-  width: 10px;
-}
-.calt-month-name {
-  flex: 1;
-  font-size: 12px;
-  font-weight: 700;
-  color: #fbbf24;
-  letter-spacing: 0.5px;
-  text-transform: uppercase;
-}
+.calt-month-chev { font-size: 10px; color: #4a5568; flex-shrink: 0; width: 10px; }
+.calt-month-name { flex: 1; font-size: 12px; font-weight: 700; color: #fbbf24; letter-spacing: 0.5px; text-transform: uppercase; }
 .calt-month-count {
-  font-size: 10px;
-  font-weight: 700;
-  color: rgba(251,191,36,0.4);
-  background: rgba(251,191,36,0.07);
-  border-radius: 8px;
-  padding: 1px 7px;
+  font-size: 10px; font-weight: 700; color: rgba(251,191,36,0.4);
+  background: rgba(251,191,36,0.07); border-radius: 8px; padding: 1px 7px;
 }
 
-.calt-month-body .calt-ev-row {
-  padding-left: 16px;
+/* Layer badges */
+.calt-layer-badge {
+  font-size: 9px; font-weight: 700; border-radius: 6px;
+  padding: 2px 6px; white-space: nowrap; flex-shrink: 0;
+}
+.calt-layer-hot  { color: #fbbf24; background: rgba(251,191,36,0.1); }
+.calt-layer-warm { color: #60a5fa; background: rgba(96,165,250,0.1); }
+
+/* Generate summary button */
+.calt-summ-gen-btn {
+  background: rgba(167,139,250,0.1);
+  border: 1px solid rgba(167,139,250,0.2);
+  border-radius: 5px;
+  color: #c4b5fd;
+  font-size: 11px; font-weight: 700;
+  width: 24px; height: 24px;
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0; transition: all 0.15s; font-family: inherit;
+  padding: 0;
+}
+.calt-summ-gen-btn:active { background: rgba(167,139,250,0.22); }
+.calt-summ-gen-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Summary row */
+.calt-month-summ-row {
+  padding: 4px 14px 6px;
+  background: rgba(96,165,250,0.02);
+  border-bottom: 1px solid rgba(255,255,255,0.03);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.calt-month-summ-row:active { background: rgba(96,165,250,0.05); }
+
+.calt-summ-text {
+  font-size: 11px; color: #60a5fa; line-height: 1.5; font-style: italic;
+  display: block;
+}
+.calt-summ-empty {
+  font-size: 10px; color: #2d3b55; line-height: 1.5;
+  display: block;
+}
+
+.calt-month-body .calt-ev-row { padding-left: 14px; }
+
+/* ── Layer legend ────────────────────────────────────────────────── */
+
+.calt-legend {
+  font-size: 10px; color: #3d4a60;
+  padding: 5px 10px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  flex-shrink: 0;
+  line-height: 1.5;
+}
+
+/* ── Pin button ──────────────────────────────────────────────────── */
+
+.calt-ev-pin {
+  opacity: 0.35;
+  font-size: 12px !important;
+}
+.calt-ev-pin:active, .calt-ev-pin-active { opacity: 1 !important; }
+.calt-ev-pin-active {
+  background: rgba(251,191,36,0.12) !important;
+  border-color: rgba(251,191,36,0.25) !important;
+}
+
+/* ── Deadline urgency ────────────────────────────────────────────── */
+
+.calt-ev-date-urgent {
+  background: rgba(251,113,133,0.15) !important;
+  border-color: rgba(251,113,133,0.4) !important;
+  color: #fb7185 !important;
+  animation: calt-pulse 2s ease-in-out infinite;
+}
+
+@keyframes calt-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.65; }
+}
+
+/* ── Mobile additions ────────────────────────────────────────────── */
+
+@media (max-width: 600px) {
+  .calt-legend { font-size: 10px; padding: 4px 8px; }
+  .calt-month-hdr { padding: 10px 8px; gap: 6px; }
+  .calt-month-name { font-size: 12px; }
+  .calt-summ-gen-btn { width: 28px; height: 28px; }
+  .calt-month-summ-row { padding: 5px 12px 7px; }
+  .calt-summ-text, .calt-summ-empty { font-size: 11px; }
+  .calt-ev-pin { width: 34px !important; height: 34px !important; }
 }
