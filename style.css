@@ -877,3 +877,11 @@
   .calt-summ-text, .calt-summ-empty { font-size: 11px; }
   .calt-ev-pin { width: 34px !important; height: 34px !important; }
 }
+
+/* Layer badge toggle */
+.calt-layer-toggle {
+  cursor: pointer;
+  transition: opacity 0.15s, transform 0.1s;
+}
+.calt-layer-toggle:hover  { opacity: 0.75; }
+.calt-layer-toggle:active { transform: scale(0.92); }

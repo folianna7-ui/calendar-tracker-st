@@ -59,6 +59,8 @@
       scanDepth:      20,
       injectionDepth: 0,
       monthSummaries: {},
+      manualHotMonths: [],   // months manually forced into hot layer
+      manualColdMonths: [],  // months manually forced out of hot layer
       nextEventId:    1,
       nextDeadlineId: 1,
     };
@@ -91,6 +93,8 @@
     if (!Array.isArray(store.keyEvents))  store.keyEvents  = [];
     if (!Array.isArray(store.deadlines))  store.deadlines  = [];
     if (!store.monthSummaries || typeof store.monthSummaries !== 'object') store.monthSummaries = {};
+    if (!Array.isArray(store.manualHotMonths))  store.manualHotMonths  = [];
+    if (!Array.isArray(store.manualColdMonths)) store.manualColdMonths = [];
     if (!store.nextEventId)    store.nextEventId    = store.keyEvents.length  + 1;
     if (!store.nextDeadlineId) store.nextDeadlineId = store.deadlines.length + 1;
     if (store.injectionDepth === undefined) store.injectionDepth = 0;
@@ -638,6 +642,20 @@
       + '</div></div>';
   }
 
+  function isMonthHot(month) {
+    const s  = getSettings();
+    const cm = currentMonth();
+    if (!Array.isArray(s.manualHotMonths))  s.manualHotMonths  = [];
+    if (!Array.isArray(s.manualColdMonths)) s.manualColdMonths = [];
+    // Explicit hot override
+    if (s.manualHotMonths.includes(month)) return true;
+    // Explicit cold override
+    if (s.manualColdMonths.includes(month)) return false;
+    // Auto: current date month
+    if (cm && month === cm) return true;
+    return false;
+  }
+
   function buildEventsTab() {
     const s  = getSettings();
     const cm = currentMonth();
@@ -654,7 +672,7 @@
       });
 
       order.forEach(function(month) {
-        const isHot   = month === cm;
+        const isHot   = isMonthHot(month);
         const coll    = !!_collapsedMonths[month];
         const summ    = s.monthSummaries[month] || '';
         listHtml += '<div class="calt-month-group">'
@@ -662,8 +680,8 @@
           + '<span class="calt-month-chev">' + (coll ? '▸' : '▾') + '</span>'
           + '<span class="calt-month-name">' + esc(month) + '</span>'
           + (isHot
-            ? '<span class="calt-layer-badge calt-layer-hot">● текущий</span>'
-            : '<span class="calt-layer-badge calt-layer-warm">● прошлый</span>')
+            ? '<span class="calt-layer-badge calt-layer-hot calt-layer-toggle" data-month="' + esc(month) + '" title="Нажмите чтобы пометить как прошлый">● текущий</span>'
+            : '<span class="calt-layer-badge calt-layer-warm calt-layer-toggle" data-month="' + esc(month) + '" title="Нажмите чтобы пометить как текущий">● прошлый</span>')
           + '<span class="calt-month-count">' + groups[month].length + '</span>'
           + (isHot ? '' : '<button class="calt-summ-gen-btn" data-month="' + esc(month) + '" title="Сгенерировать AI саммери">✦</button>')
           + '</div>';
@@ -772,6 +790,32 @@
       const action = _collapsedMonths[month] ? 'slideUp' : 'slideDown';
       $body[action](160);
       $(this).find('.calt-month-chev').text(_collapsedMonths[month] ? '▸' : '▾');
+    });
+
+    // Layer badge toggle (hot/warm manual override)
+    $('.calt-layer-toggle').off('click').on('click', function(e) {
+      e.stopPropagation();
+      const month = $(this).data('month');
+      const s     = getSettings();
+      const idx   = s.manualHotMonths.indexOf(month);
+      if (isMonthHot(month)) {
+        // Currently hot → mark as past (add to a "forced cold" list by removing from hot
+        // and ensuring auto-match is blocked via a sentinel)
+        if (idx !== -1) s.manualHotMonths.splice(idx, 1);
+        // If it was auto-hot (current month), add explicit cold sentinel
+        if (!s.manualColdMonths) s.manualColdMonths = [];
+        if (!s.manualColdMonths.includes(month)) s.manualColdMonths.push(month);
+        toast(month + ' → прошлый', '#60a5fa');
+      } else {
+        // Currently warm/cold → force hot
+        if (idx === -1) s.manualHotMonths.push(month);
+        if (s.manualColdMonths) {
+          const ci = s.manualColdMonths.indexOf(month);
+          if (ci !== -1) s.manualColdMonths.splice(ci, 1);
+        }
+        toast(month + ' → текущий 🔥', '#fbbf24');
+      }
+      save(); updatePrompt(); renderTabContent();
     });
 
     // Summary: click text/empty to open edit
