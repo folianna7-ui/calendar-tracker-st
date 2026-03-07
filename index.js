@@ -758,6 +758,18 @@
 
     refreshSettingsUi();
 
+    // ── Floating action button (always visible, bypasses ST event handling) ─
+    if (!$('#calt_fab').length) {
+      $(document.body).append('<button id="calt_fab" title="Calendar Tracker">\uD83D\uDDD3</button>');
+      const fab = document.getElementById('calt_fab');
+      fab.addEventListener('touchstart', function(e) {
+        e.stopPropagation(); e.preventDefault(); openModal();
+      }, { capture: true, passive: false });
+      fab.addEventListener('click', function(e) {
+        e.stopPropagation(); e.preventDefault(); openModal();
+      }, { capture: true });
+    }
+
     $('#calt_hdr').on('click', () => {
       const $b = $('#calt_body'); $b.slideToggle(180);
       $('#calt_chev').text($b.is(':visible') ? '▾' : '▸');
