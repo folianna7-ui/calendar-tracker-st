@@ -859,9 +859,10 @@
         +'<div class="calt-cfg-hdr calt-sec-toggle" data-sec="'+key+'">'
         +'<span class="calt-sec-chev2">'+(coll?'▸':'▾')+'</span>'
         +icon+' '+title
-        +(extraBtn||'')
         +'</div>'
-        +'<div class="calt-cfg-sec-body"'+(coll?' style="display:none"':'')+'>'+bodyHtml+'</div>'
+        +'<div class="calt-cfg-sec-body"'+(coll?' style="display:none"':'')+''
+        +(extraBtn?'><div class="calt-sec-add-row">'+extraBtn+'</div>'+bodyHtml:'>'+ bodyHtml)
+        +'</div>'
         +'</div>';
     }
 
@@ -875,12 +876,12 @@
     let monthsRows = '<div class="calt-cfg-row calt-cfg-thead"><span></span><span>Название</span><span>Дней</span><span>Сезон</span><span>Ежегодные события</span><span></span></div>';
     cc.months.forEach((m,i) => {
       monthsRows+='<div class="calt-cfg-row calt-month-row" data-idx="'+i+'">'
-        +'<div class="calt-reorder-btns"><button class="calt-reorder-btn calt-move-month-up" data-idx="'+i+'">↑</button><button class="calt-reorder-btn calt-move-month-dn" data-idx="'+i+'">↓</button></div>'
+        +'<div class="calt-reorder-btns"><button class="calt-reorder-btn" data-rules-action="mv-month-up" data-idx="'+i+'">↑</button><button class="calt-reorder-btn" data-rules-action="mv-month-dn" data-idx="'+i+'">↓</button></div>'
         +'<input class="calt-cfg-inp-sm" data-field="name" placeholder="Название" value="'+esc(m.name||'')+'">'
         +'<input class="calt-cfg-inp-xs" type="number" min="1" max="400" data-field="days" placeholder="Дн" value="'+esc(m.days||'')+'">'
         +'<input class="calt-cfg-inp-sm" data-field="season" placeholder="Сезон" value="'+esc(m.season||'')+'">'
         +'<input class="calt-cfg-inp-lg" data-field="recurringNote" placeholder="Ежегодные события..." value="'+esc(m.recurringNote||'')+'">'
-        +'<button class="calt-cfg-del-btn calt-del-month" data-idx="'+i+'">✕</button>'
+        +'<button class="calt-cfg-del-btn" data-rules-action="del-month" data-idx="'+i+'">✕</button>'
         +'</div>';
     });
     const monthsHtml = '<div id="cfg_months_list">'+monthsRows+'</div>';
@@ -889,11 +890,11 @@
     let wdRows = '';
     cc.weekDays.forEach((d,i) => {
       wdRows+='<div class="calt-cfg-row calt-wd-row" data-idx="'+i+'">'
-        +'<div class="calt-reorder-btns"><button class="calt-reorder-btn calt-move-wd-up" data-idx="'+i+'">↑</button><button class="calt-reorder-btn calt-move-wd-dn" data-idx="'+i+'">↓</button></div>'
+        +'<div class="calt-reorder-btns"><button class="calt-reorder-btn" data-rules-action="mv-wd-up" data-idx="'+i+'">↑</button><button class="calt-reorder-btn" data-rules-action="mv-wd-dn" data-idx="'+i+'">↓</button></div>'
         +'<span class="calt-wd-num">'+(i+1)+'.</span>'
         +'<input class="calt-cfg-inp-sm" data-field="name" placeholder="Название" value="'+esc(d.name||'')+'">'
         +'<input class="calt-cfg-inp-lg" data-field="note" placeholder="Описание дня..." value="'+esc(d.note||'')+'">'
-        +'<button class="calt-cfg-del-btn calt-del-wd" data-idx="'+i+'">✕</button>'
+        +'<button class="calt-cfg-del-btn" data-rules-action="del-wd" data-idx="'+i+'">✕</button>'
         +'</div>';
     });
     let wdRefHtml = '';
@@ -910,11 +911,11 @@
       let phasesHtml = '';
       (moon.phases||[]).forEach((ph,pi) => {
         phasesHtml+='<div class="calt-phase-row" data-moon="'+mi+'" data-idx="'+pi+'">'
-          +'<div class="calt-reorder-btns"><button class="calt-reorder-btn calt-move-ph-up" data-moon="'+mi+'" data-idx="'+pi+'">↑</button><button class="calt-reorder-btn calt-move-ph-dn" data-moon="'+mi+'" data-idx="'+pi+'">↓</button></div>'
+          +'<div class="calt-reorder-btns"><button class="calt-reorder-btn" data-rules-action="mv-ph-up" data-moon="'+mi+'" data-idx="'+pi+'">↑</button><button class="calt-reorder-btn" data-rules-action="mv-ph-dn" data-moon="'+mi+'" data-idx="'+pi+'">↓</button></div>'
           +'<input class="calt-cfg-inp-sm" data-field="name" placeholder="Фаза" value="'+esc(ph.name||'')+'">'
           +'<input class="calt-cfg-inp-xs" type="number" min="1" data-field="days" placeholder="Дн" value="'+esc(ph.days||'')+'">'
           +'<input class="calt-cfg-inp-lg" data-field="note" placeholder="Описание фазы..." value="'+esc(ph.note||'')+'">'
-          +'<button class="calt-cfg-del-btn calt-del-phase" data-moon="'+mi+'" data-idx="'+pi+'">✕</button>'
+          +'<button class="calt-cfg-del-btn" data-rules-action="del-phase" data-moon="'+mi+'" data-idx="'+pi+'">✕</button>'
           +'</div>';
       });
       const totalDays = (moon.phases||[]).reduce((s,p) => s+(parseInt(p.days,10)||0), 0);
@@ -928,10 +929,10 @@
         +'<input class="calt-cfg-inp-sm calt-moon-nickname" data-moon="'+mi+'" placeholder="Прозвище" value="'+esc(moon.nickname||'')+'">'
         +'<input class="calt-cfg-inp-xs calt-moon-cycle" data-moon="'+mi+'" type="number" min="1" placeholder="Цикл" value="'+esc(moon.cycleDays||'')+'">'
         +warn
-        +'<button class="calt-cfg-del-btn calt-del-moon" data-moon="'+mi+'">✕ луну</button>'
+        +'<button class="calt-cfg-del-btn" data-rules-action="del-moon" data-moon="'+mi+'">✕ луну</button>'
         +'</div>'
         +'<div class="calt-phases-list" data-moon="'+mi+'">'+phasesHtml+'</div>'
-        +'<button class="calt-cfg-add-sm calt-add-phase" data-moon="'+mi+'">+ Фаза</button>'
+        +'<button class="calt-cfg-add-sm" data-rules-action="add-phase" data-moon="'+mi+'">+ Фаза</button>'
         +(moon.phases.length?'<div class="calt-cfg-ref-row">'
           +'<span class="calt-cfg-ref-label">Точка: дата</span>'
           +'<input class="calt-cfg-inp-sm calt-moon-ref-date" data-moon="'+mi+'" value="'+esc(moon.refDate||'')+'" placeholder="1 Vael 1000">'
@@ -947,9 +948,9 @@
 
     return '<div class="calt-rules-wrap">'
       + secWrap('basics', '📅', 'Основы', '', basicsHtml)
-      + secWrap('months', '📆', 'Месяца', '<button class="calt-cfg-add-btn" id="cfg_add_month">+ Добавить</button>', monthsHtml)
-      + secWrap('week',   '📅', 'Дни недели', '<button class="calt-cfg-add-btn" id="cfg_add_wd">+ Добавить</button>', weekHtml)
-      + secWrap('moons',  '🌙', 'Луны', '<button class="calt-cfg-add-btn" id="cfg_add_moon">+ Добавить луну</button>', moonsHtml)
+      + secWrap('months', '📆', 'Месяца', '<button class="calt-cfg-add-btn" data-rules-action="add-month">+ Добавить месяц</button>', monthsHtml)
+      + secWrap('week',   '📅', 'Дни недели', '<button class="calt-cfg-add-btn" data-rules-action="add-wd">+ Добавить день</button>', weekHtml)
+      + secWrap('moons',  '🌙', 'Луны', '<button class="calt-cfg-add-btn" data-rules-action="add-moon">+ Добавить луну</button>', moonsHtml)
       + secWrap('notes',  '📝', 'Заметки', '', notesHtml)
       + '<div class="calt-rules-actions">'
       + '<button class="menu_button calt-scan-btn" id="calt_rules_extract_btn">✦ Извлечь из лорбука</button>'
@@ -1209,21 +1210,42 @@
       [arr[idx],arr[to]]=[arr[to],arr[idx]]; renderTabContent();
     });
 
-    // Add/delete months
-    $('#cfg_add_month').off('click').on('click', () => { syncDraft(); _cfgDraft.months.push({name:'',days:30,season:'',recurringNote:''}); renderTabContent(); });
-    $(document).off('click.delmth').on('click.delmth', '.calt-del-month', function() { syncDraft(); _cfgDraft.months.splice(+$(this).data('idx'),1); renderTabContent(); });
+    // All add/delete/reorder for rules — use document delegation so they survive re-renders
+    // and won't interfere with section toggle.
+    function ensureDraft() { if (!_cfgDraft) _cfgDraft = JSON.parse(JSON.stringify(getSettings().calendarConfig)); }
 
-    // Add/delete weekdays
-    $('#cfg_add_wd').off('click').on('click', () => { syncDraft(); _cfgDraft.weekDays.push({name:'',note:''}); renderTabContent(); });
-    $(document).off('click.delwd').on('click.delwd', '.calt-del-wd', function() { syncDraft(); _cfgDraft.weekDays.splice(+$(this).data('idx'),1); renderTabContent(); });
+    $(document).off('click.calt_rules').on('click.calt_rules', '[data-rules-action]', function(e) {
+      e.stopPropagation();
+      ensureDraft(); syncDraft();
+      const action=$(this).data('rules-action');
+      const idx = +$(this).data('idx');
+      const mi  = +$(this).data('moon');
 
-    // Add/delete moons
-    $('#cfg_add_moon').off('click').on('click', () => { syncDraft(); _cfgDraft.moons.push({name:'',nickname:'',cycleDays:28,refDate:'',refPhaseIndex:0,phases:[]}); renderTabContent(); });
-    $(document).off('click.delmoon').on('click.delmoon', '.calt-del-moon', function() { syncDraft(); _cfgDraft.moons.splice(+$(this).data('moon'),1); renderTabContent(); });
-
-    // Add/delete phases
-    $(document).off('click.addph').on('click.addph', '.calt-add-phase', function() { syncDraft(); const mi=+$(this).data('moon'); if(_cfgDraft.moons[mi])_cfgDraft.moons[mi].phases.push({name:'',days:7,note:''}); renderTabContent(); });
-    $(document).off('click.delph').on('click.delph', '.calt-del-phase', function() { syncDraft(); const mi=+$(this).data('moon'), pi=+$(this).data('idx'); if(_cfgDraft.moons[mi])_cfgDraft.moons[mi].phases.splice(pi,1); renderTabContent(); });
+      if      (action==='add-month')  _cfgDraft.months.push({name:'',days:30,season:'',recurringNote:''});
+      else if (action==='del-month')  _cfgDraft.months.splice(idx,1);
+      else if (action==='mv-month-up' && idx>0)                             { const a=_cfgDraft.months; [a[idx],a[idx-1]]=[a[idx-1],a[idx]]; }
+      else if (action==='mv-month-dn' && idx<_cfgDraft.months.length-1)    { const a=_cfgDraft.months; [a[idx],a[idx+1]]=[a[idx+1],a[idx]]; }
+      else if (action==='add-wd')     _cfgDraft.weekDays.push({name:'',note:''});
+      else if (action==='del-wd')     _cfgDraft.weekDays.splice(idx,1);
+      else if (action==='mv-wd-up'  && idx>0)                               { const a=_cfgDraft.weekDays; [a[idx],a[idx-1]]=[a[idx-1],a[idx]]; }
+      else if (action==='mv-wd-dn'  && idx<_cfgDraft.weekDays.length-1)    { const a=_cfgDraft.weekDays; [a[idx],a[idx+1]]=[a[idx+1],a[idx]]; }
+      else if (action==='add-moon')   _cfgDraft.moons.push({name:'',nickname:'',cycleDays:28,refDate:'',refPhaseIndex:0,phases:[]});
+      else if (action==='del-moon')   _cfgDraft.moons.splice(mi,1);
+      else if (action==='add-phase' && _cfgDraft.moons[mi])  _cfgDraft.moons[mi].phases.push({name:'',days:7,note:''});
+      else if (action==='del-phase' && _cfgDraft.moons[mi]) {
+        const pi=+$(this).data('idx'); _cfgDraft.moons[mi].phases.splice(pi,1);
+      }
+      else if (action==='mv-ph-up' && _cfgDraft.moons[mi]) {
+        const pi=+$(this).data('idx'), a=_cfgDraft.moons[mi].phases;
+        if(pi>0) [a[pi],a[pi-1]]=[a[pi-1],a[pi]];
+      }
+      else if (action==='mv-ph-dn' && _cfgDraft.moons[mi]) {
+        const pi=+$(this).data('idx'), a=_cfgDraft.moons[mi].phases;
+        if(pi<a.length-1) [a[pi],a[pi+1]]=[a[pi+1],a[pi]];
+      }
+      else return; // unknown action, don't re-render
+      renderTabContent();
+    });
 
     // Mark dirty on any change
     $(document).off('input.cfgdirty').on('input.cfgdirty', '.calt-cfg-inp-sm,.calt-cfg-inp-lg,.calt-cfg-inp-xs,.calt-cfg-sel,.calt-moon-name,.calt-moon-nickname,.calt-moon-cycle,.calt-moon-ref-date,.calt-moon-ref-phase,#calt_rules_edit', () => { _cfgDirty=true; });

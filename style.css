@@ -413,3 +413,9 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
   .calt-add-date   { width:90px; }
   .calt-ev-acts    { opacity:1; }
 }
+
+/* sec-add-row — add buttons now live inside sec-body */
+.calt-sec-add-row {
+  padding:6px 12px;
+  border-bottom:1px solid rgba(255,255,255,0.04);
+}
