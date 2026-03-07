@@ -60,25 +60,49 @@
     };
   }
 
+  /**
+   * Storage: tries chat_metadata (per-chat) first, falls back to extensionSettings (global).
+   * Falls back when saveMetadata is unavailable — common in some ST builds.
+   */
+  function _usePerChat() {
+    try {
+      const c = ctx();
+      return !!(c.chat_metadata && typeof c.saveMetadata === 'function');
+    } catch(e) { return false; }
+  }
+
   function getSettings() {
     const c = ctx();
-    const meta = c.chat_metadata;
-    if (!meta) return defaultSettings();
-    if (!meta[MODULE_KEY]) meta[MODULE_KEY] = defaultSettings();
-    const s = meta[MODULE_KEY];
-    if (!Array.isArray(s.keyEvents))  s.keyEvents  = [];
-    if (!Array.isArray(s.deadlines))  s.deadlines  = [];
-    if (!s.monthSummaries || typeof s.monthSummaries !== 'object') s.monthSummaries = {};
-    if (!s.nextEventId)    s.nextEventId    = s.keyEvents.length  + 1;
-    if (!s.nextDeadlineId) s.nextDeadlineId = s.deadlines.length + 1;
-    if (s.injectionDepth === undefined) s.injectionDepth = 0;
-    s.keyEvents.forEach(function(e) { if (e.pinned === undefined) e.pinned = false; });
-    return s;
+    let store;
+
+    if (_usePerChat()) {
+      if (!c.chat_metadata[MODULE_KEY]) c.chat_metadata[MODULE_KEY] = defaultSettings();
+      store = c.chat_metadata[MODULE_KEY];
+    } else {
+      if (!c.extensionSettings[MODULE_KEY])
+        c.extensionSettings[MODULE_KEY] = defaultSettings();
+      store = c.extensionSettings[MODULE_KEY];
+    }
+
+    if (!Array.isArray(store.keyEvents))  store.keyEvents  = [];
+    if (!Array.isArray(store.deadlines))  store.deadlines  = [];
+    if (!store.monthSummaries || typeof store.monthSummaries !== 'object') store.monthSummaries = {};
+    if (!store.nextEventId)    store.nextEventId    = store.keyEvents.length  + 1;
+    if (!store.nextDeadlineId) store.nextDeadlineId = store.deadlines.length + 1;
+    if (store.injectionDepth === undefined) store.injectionDepth = 0;
+    store.keyEvents.forEach(function(e) { if (e.pinned === undefined) e.pinned = false; });
+    return store;
   }
 
   function save() {
     const c = ctx();
-    if (c.chat_metadata && typeof c.saveMetadata === 'function') c.saveMetadata();
+    try {
+      if (_usePerChat()) {
+        c.saveMetadata();
+      } else if (typeof c.saveSettingsDebounced === 'function') {
+        c.saveSettingsDebounced();
+      }
+    } catch(e) { console.warn('[CalTracker] save failed:', e.message); }
   }
 
   // ─── Layered prompt ───────────────────────────────────────────────────────
