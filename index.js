@@ -781,7 +781,7 @@
         $s.css('color','#34d399').text('✅ ' + r.trim().slice(0,50));
       } catch(e) { $s.css('color','#f87171').text('✗ ' + e.message); }
     });
-    $('#calt_open_btn').on('click', openModal);
+    $('#calt_open_btn').on('click touchend', function(e) { e.preventDefault(); openModal(); });
     bindPanelDate3();
   }
 
@@ -876,7 +876,7 @@
       syncModalDate(); renderTabContent(); return;
     }
 
-    $('body').append(`
+    $(document.body).append(`
       <div class="calt-modal" id="calt_modal">
         <div class="calt-modal-inner">
           <div class="calt-drag-handle"></div>
@@ -908,7 +908,7 @@
     syncModalDate();
     _showModal();
 
-    $('#calt_modal_close,#calt_modal_close2').on('click', () => _hideModal());
+    $('#calt_modal_close,#calt_modal_close2').on('click touchend', function(e) { e.preventDefault(); _hideModal(); });
     $('#calt_modal').on('click', e => {
       if ($(e.target).is('#calt_modal') && window.innerWidth > 600)
         _hideModal();

@@ -15,7 +15,7 @@
 .calt-field-label { font-size:11px; color:#4a5568; margin-top:5px; }
 .calt-field-row { display:flex; align-items:center; gap:7px; }
 .calt-flabel { font-size:11px; color:#4a5568; white-space:nowrap; }
-.calt-open-btn { width:100%; margin-top:8px !important; }
+.calt-open-btn { width:100%; margin-top:8px !important; touch-action:manipulation; -webkit-tap-highlight-color:rgba(251,191,36,0.2); }
 .calt-sec { margin-top:8px; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px; }
 .calt-sec-hdr { display:flex; align-items:center; gap:6px; cursor:pointer; font-size:11px; color:#4a5568; padding:3px 0; user-select:none; }
 .calt-sec-body { padding:6px 0 2px; }
@@ -45,6 +45,8 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
   z-index:2147483640;
   background:rgba(0,0,0,0.5);
   pointer-events:auto;
+  will-change:transform;
+  -webkit-overflow-scrolling:touch;
 }
 .calt-modal.calt-mopen {
   display:flex !important;
@@ -73,6 +75,7 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-modal-x {
   background:none; border:none; color:#4a5568; font-size:16px; cursor:pointer;
   padding:4px; line-height:1; font-family:inherit; flex-shrink:0; transition:color 0.15s;
+  touch-action:manipulation; -webkit-tap-highlight-color:transparent;
 }
 .calt-modal-x:hover { color:#94a3b8; }
 
@@ -81,14 +84,14 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-tab {
   flex:1; padding:10px 8px; background:none; border:none; border-bottom:2px solid transparent;
   color:#4a5568; font-size:12px; font-weight:600; cursor:pointer; font-family:inherit;
-  transition:all 0.15s; white-space:nowrap;
+  transition:all 0.15s; white-space:nowrap; touch-action:manipulation; -webkit-tap-highlight-color:transparent;
 }
 .calt-tab:hover  { color:#94a3b8; }
 .calt-tab.active { color:#fbbf24; border-bottom-color:#fbbf24; }
 
 /* ── Tab body ───────────────────────────────────────────────── */
 .calt-tab-body  { flex:1; display:flex; flex-direction:column; overflow:hidden; min-height:0; }
-.calt-list-wrap { flex:1; overflow-y:auto; min-height:0; }
+.calt-list-wrap { flex:1; overflow-y:auto; min-height:0; -webkit-overflow-scrolling:touch; }
 .calt-list      { padding:0; }
 
 /* ── Calendar info bar ──────────────────────────────────────── */
@@ -283,7 +286,7 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-empty { padding:32px 20px; text-align:center; color:#3d4a60; font-size:13px; line-height:1.6; }
 
 /* ── Rules tab ──────────────────────────────────────────────── */
-.calt-rules-wrap { overflow-y:auto; flex:1; padding:8px 12px 12px; }
+.calt-rules-wrap { overflow-y:auto; flex:1; padding:8px 12px 12px; -webkit-overflow-scrolling:touch; }
 .calt-cfg-section { border:1px solid rgba(255,255,255,0.05); border-radius:8px; margin:6px 0; overflow:hidden; }
 .calt-cfg-hdr {
   display:flex; align-items:center; gap:7px; padding:8px 12px;
