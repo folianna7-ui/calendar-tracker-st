@@ -419,8 +419,28 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 
 /* ── Mobile ─────────────────────────────────────────────────── */
 @media (max-width:600px) {
-  .calt-modal { padding-top:0; align-items:flex-end; }
-  .calt-modal-inner { border-radius:14px 14px 0 0; max-height:92vh; width:100vw; }
+  /* Mobile: top panel (no backdrop, no bottom sheet) — matches v1.1 working layout */
+  .calt-modal {
+    background: none;
+    backdrop-filter: none;
+    padding: 0;
+    align-items: flex-start;
+    justify-content: stretch;
+    top: 48px;
+    bottom: auto;
+  }
+  .calt-modal-inner {
+    border-radius: 0 0 14px 14px;
+    border-top: none;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+    max-height: calc(100vh - 48px - 56px);
+    /* No animation — instant appear to avoid Android render bugs */
+    animation: none !important;
+    transition: none !important;
+  }
+  .calt-drag-handle { display: none; }
   .calt-modal-hdr { flex-wrap:wrap; gap:6px; }
   .calt-modal-date-wrap { width:100%; }
   .calt-date3-day  { width:50px; }

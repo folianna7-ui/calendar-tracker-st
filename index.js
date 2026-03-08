@@ -784,7 +784,21 @@
         $s.css('color','#34d399').text('✅ ' + r.trim().slice(0,50));
       } catch(e) { $s.css('color','#f87171').text('✗ ' + e.message); }
     });
-    $('#calt_open_btn').on('click', openModal);
+    // Bulletproof open button — works on Android Chrome where jQuery click can be swallowed
+    // by ST's own touch/swipe handlers on the extensions panel.
+    const _openBtnEl = document.getElementById('calt_open_btn');
+    if (_openBtnEl) {
+      let _touchMoved = false;
+      _openBtnEl.addEventListener('touchstart', function(e) {
+        _touchMoved = false;
+        e.stopPropagation();
+      }, { passive: true });
+      _openBtnEl.addEventListener('touchmove', function() { _touchMoved = true; }, { passive: true });
+      _openBtnEl.addEventListener('touchend', function(e) {
+        if (!_touchMoved) { e.preventDefault(); e.stopPropagation(); openModal(); }
+      }, { passive: false });
+      _openBtnEl.addEventListener('click', openModal);
+    }
     bindPanelDate3();
   }
 
