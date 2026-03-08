@@ -280,10 +280,14 @@
     const s = getSettings();
     const horizon = s.deadlineHorizon || 7;
     const curAbs = getCurrentAbsDay();
-    if (curAbs === null) return true; // no date info — show everything
+    if (curAbs === null) return true; // no current date set — show everything
     const p = parseDateString(deadline.date);
-    const dlAbs = dateToAbsDay(p.day, p.month, p.year);
-    if (dlAbs === null) return true; // no parsable date — treat as hot
+    // If deadline has no day or no month, we can't calculate — treat as hot
+    if (!p.day || !p.month) return true;
+    // Use current year as fallback if deadline year is missing
+    const dlYear = p.year || s.currentYear;
+    const dlAbs = dateToAbsDay(p.day, p.month, dlYear);
+    if (dlAbs === null) return true; // month name not in config — treat as hot
     const diff = dlAbs - curAbs;
     return diff <= horizon; // includes past deadlines and those within horizon
   }
@@ -845,10 +849,13 @@
             <span id="calt_depth_timeline_val" style="font-size:12px;color:#fbbf24;min-width:18px;text-align:right">4</span>
           </div>
           <div style="font-size:10px;color:#3d4a60;margin-top:1px">0 = конец промпта · 5 = за 5 сообщениями</div>
-          <div class="calt-field-row" style="margin-top:6px">
-            <span class="calt-flabel">Горизонт дедлайна (дни)</span>
-            <input type="number" class="calt-depth-inp" id="calt_dl_horizon" min="1" max="365" style="width:52px">
-            <span style="font-size:10px;color:#3d4a60">дн. (в контексте)</span>
+          <div style="border-top:1px solid rgba(255,255,255,0.05);margin-top:6px;padding-top:6px">
+            <div class="calt-field-row">
+              <span class="calt-flabel">⏳ Горизонт дедлайна</span>
+              <input type="number" class="calt-depth-inp" id="calt_dl_horizon" min="1" max="365" style="width:52px" value="7">
+              <span style="font-size:10px;color:#3d4a60">дней</span>
+            </div>
+            <div style="font-size:10px;color:#3d4a60;margin-top:1px">Дедлайны дальше этого срока скрыты из контекста</div>
           </div>
           <button class="menu_button calt-open-btn" id="calt_open_btn">📖 Открыть календарь</button>
           <div class="calt-sec" id="calt_conn_wrap">
@@ -1301,9 +1308,37 @@
             ? '<span class="calt-ev-date' + (approaching ? ' calt-ev-date-urgent' : '') + '">' + (approaching?'⚠ ':'') + esc(e.date) + '</span>'
             : '<span class="calt-ev-date calt-ev-date-empty">—</span>';
           const typeBadge = '<span class="calt-dl-type-badge" style="border-color:' + dt.color + ';color:' + dt.color + '">' + dt.label + '</span>';
-          const hotBadge = hot
-            ? '<span class="calt-dl-hot-badge">● в контексте</span>'
-            : '<span class="calt-dl-cold-badge">○ скрыт</span>';
+          // Compute reason for hot/cold status
+          let hotBadge;
+          if (e.pinned) {
+            hotBadge = '<span class="calt-dl-hot-badge">📌 в контексте</span>';
+          } else if (hot) {
+            // Show days until deadline if calculable
+            const curAbs = getCurrentAbsDay();
+            const p = parseDateString(e.date);
+            const dlYear = p.year || getSettings().currentYear;
+            const dlAbs = dateToAbsDay(p.day, p.month, dlYear);
+            if (curAbs !== null && dlAbs !== null) {
+              const diff = dlAbs - curAbs;
+              if (diff < 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● просрочен (' + Math.abs(diff) + 'дн)</span>';
+              else if (diff === 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● СЕГОДНЯ</span>';
+              else hotBadge = '<span class="calt-dl-hot-badge">● через ' + diff + 'дн</span>';
+            } else {
+              hotBadge = '<span class="calt-dl-hot-badge">● нет даты</span>';
+            }
+          } else {
+            // Cold — show how far
+            const curAbs = getCurrentAbsDay();
+            const p = parseDateString(e.date);
+            const dlYear = p.year || getSettings().currentYear;
+            const dlAbs = dateToAbsDay(p.day, p.month, dlYear);
+            if (curAbs !== null && dlAbs !== null) {
+              const diff = dlAbs - curAbs;
+              hotBadge = '<span class="calt-dl-cold-badge">○ через ' + diff + 'дн</span>';
+            } else {
+              hotBadge = '<span class="calt-dl-cold-badge">○ скрыт</span>';
+            }
+          }
           const titleHtml = e.title ? '<span class="calt-dl-title">' + esc(e.title) + '</span>' : '';
           const pinClass = e.pinned ? ' calt-ev-pin-active' : '';
           listHtml += '<div class="calt-ev-row' + (hot ? '' : ' calt-dl-row-cold') + '" data-id="' + e.id + '" data-type="deadline">'
