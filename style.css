@@ -258,6 +258,7 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 }
 /* date3 inside add row: sits inline, no extra margin */
 .calt-add-date3 { flex-shrink:0; display:flex; gap:4px; align-items:center; }
+.calt-add-date3 .calt-date3-row { flex:1; width:100%; }
 .calt-add-date {
   width:110px; flex-shrink:0; background:#0d1117; border:1px solid rgba(255,255,255,0.09);
   border-radius:6px; color:#c9d1e0; padding:8px 10px; font-size:12px; font-family:inherit; outline:none;
@@ -456,7 +457,17 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
   .calt-cfg-inp-xs { width:52px; }
   .calt-moon-card  { margin:6px; }
   .calt-tag-picker { max-width:calc(100vw - 20px); }
-  .calt-add-row    { flex-wrap:wrap; }
+  .calt-add-row    { flex-wrap:wrap; gap:6px; padding:8px 10px; }
+  /* date3 picker takes full width on first line */
+  .calt-add-date3  { width:100%; order:1; display:flex; }
+  .calt-add-date3 .calt-date3-row { flex:1; }
+  .calt-date3-day  { width:52px; }
+  .calt-date3-year { width:64px; }
+  /* month select fills remaining space */
+  .calt-date3-month { flex:1; min-width:0; max-width:none; width:auto; }
+  /* text input and button share second line */
+  .calt-add-txt    { order:2; flex:1; min-width:0; }
+  .calt-add-btn    { order:3; flex-shrink:0; }
   .calt-add-date   { width:90px; }
   .calt-ev-acts    { opacity:1; }
   .calt-modal-x    { min-width:44px; min-height:44px; font-size:20px; display:flex; align-items:center; justify-content:center; }
