@@ -743,7 +743,7 @@
             <span id="calt_depth_val" style="font-size:12px;color:#fbbf24;min-width:18px;text-align:right">0</span>
           </div>
           <div style="font-size:10px;color:#3d4a60;margin-top:1px">0 = конец промпта · 5 = за 5 сообщениями</div>
-          <button class="calt-open-btn" id="calt_open_btn">📖 Открыть календарь</button>
+          <button class="menu_button calt-open-btn" id="calt_open_btn">📖 Открыть календарь</button>
           <div class="calt-sec" id="calt_conn_wrap">
             <div class="calt-sec-hdr" id="calt_conn_hdr"><span class="calt-sec-chev" id="calt_conn_chev">▸</span><span>🔌 Подключение</span></div>
             <div class="calt-sec-body" id="calt_conn_body" style="display:none">
