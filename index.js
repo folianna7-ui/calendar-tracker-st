@@ -867,12 +867,21 @@
   }
 
   // ─── Modal ────────────────────────────────────────────────────────────────
-  // Pre-rendered at boot; show/hide just toggles CSS class (like FM pattern)
   function _showModal() {
-    $('#calt_modal').removeClass('calt-mhidden');
-    syncModalDate(); renderTabContent();
+    const el = document.getElementById('calt_modal');
+    if (!el) { console.error('[CalTracker] modal element not found'); return; }
+    el.classList.remove('calt-mhidden');
+    el.style.display = 'flex';
+    console.log('[CalTracker] modal shown');
+    try { syncModalDate(); } catch(e) { console.warn('[CalTracker] syncModalDate err:', e); }
+    try { renderTabContent(); } catch(e) { console.warn('[CalTracker] renderTabContent err:', e); }
   }
-  function _hideModal() { $('#calt_modal').addClass('calt-mhidden'); }
+  function _hideModal() {
+    const el = document.getElementById('calt_modal');
+    if (!el) return;
+    el.classList.add('calt-mhidden');
+    el.style.display = 'none';
+  }
 
   function openModal() { _showModal(); }
 
@@ -1812,13 +1821,22 @@
           </div>
         </div>`);
 
-      // 2. Floating button — appended to body, wired with both click+touchend (FM pattern)
+      // 2. Floating button — native addEventListener, touchstart with capture
+      // (jQuery touchend was unreliable on Android ST WebView)
       $(document.body).append('<button id="calt_fab" title="Calendar Tracker">\uD83D\uDDD3</button>');
-      $('#calt_fab').on('click touchend', function(e) {
+      const fabEl = document.getElementById('calt_fab');
+      fabEl.addEventListener('touchstart', function(e) {
+        console.log('[CalTracker] FAB touchstart');
         e.preventDefault();
         e.stopPropagation();
         openModal();
-      });
+      }, { passive: false, capture: true });
+      fabEl.addEventListener('click', function(e) {
+        console.log('[CalTracker] FAB click');
+        e.preventDefault();
+        e.stopPropagation();
+        openModal();
+      }, { capture: true });
 
       // 3. Wire modal events ONCE here (not inside openModal)
       $('#calt_modal_close, #calt_modal_close2').on('click touchend', function(e) {
