@@ -291,51 +291,54 @@
   // ─── syncDraftFromDOM ─────────────────────────────────────────────────────
   // Top-level: reads the Rules tab form into _cfgDraft + schedules sessionStorage write.
   // Safe to call when Rules tab is not in DOM (returns early after marking dirty).
+  // Safe .val() helper — never throws when element is absent
+  function _v($el) { return ($el.val() || '').trim(); }
+
   function syncDraftFromDOM() {
     _cfgDirty = true;
     updateDirtyBadge();
     if (!_cfgDraft) _cfgDraft = JSON.parse(JSON.stringify(getSettings().calendarConfig));
     if (!$('#cfg_name').length) return; // Rules tab not rendered — nothing to read
 
-    _cfgDraft.name    = $('#cfg_name').val().trim();
-    _cfgDraft.era     = $('#cfg_era').val().trim();
-    _cfgDraft.eraFrom = $('#cfg_erafrom').val().trim();
+    _cfgDraft.name    = _v($('#cfg_name'));
+    _cfgDraft.era     = _v($('#cfg_era'));
+    _cfgDraft.eraFrom = _v($('#cfg_erafrom'));
 
     _cfgDraft.months = [];
     $('#cfg_months_list .calt-month-row').each(function() {
       _cfgDraft.months.push({
-        name:          $(this).find('[data-field="name"]').val().trim(),
+        name:          _v($(this).find('[data-field="name"]')),
         days:          parseInt($(this).find('[data-field="days"]').val(), 10) || 30,
-        season:        $(this).find('[data-field="season"]').val().trim(),
-        recurringNote: $(this).find('[data-field="recurringNote"]').val().trim(),
+        season:        _v($(this).find('[data-field="season"]')),
+        recurringNote: _v($(this).find('[data-field="recurringNote"]')),
       });
     });
 
     _cfgDraft.weekDays = [];
     $('#cfg_wd_list .calt-wd-row').each(function() {
       _cfgDraft.weekDays.push({
-        name: $(this).find('[data-field="name"]').val().trim(),
-        note: $(this).find('[data-field="note"]').val().trim(),
+        name: _v($(this).find('[data-field="name"]')),
+        note: _v($(this).find('[data-field="note"]')),
       });
     });
-    _cfgDraft.weekRefDate     = $('#cfg_week_ref_date').val().trim();
+    _cfgDraft.weekRefDate     = _v($('#cfg_week_ref_date'));
     _cfgDraft.weekRefDayIndex = parseInt($('#cfg_week_ref_day').val(), 10) || 0;
 
     $('#cfg_moons_list .calt-moon-card').each(function() {
       const mi   = +$(this).data('moon');
       const moon = _cfgDraft.moons[mi];
       if (!moon) return;
-      moon.name      = $(this).find('.calt-moon-name').val().trim();
-      moon.nickname  = $(this).find('.calt-moon-nickname').val().trim();
+      moon.name      = _v($(this).find('.calt-moon-name'));
+      moon.nickname  = _v($(this).find('.calt-moon-nickname'));
       moon.cycleDays = parseInt($(this).find('.calt-moon-cycle').val(), 10) || 28;
-      moon.refDate   = $(this).find('.calt-moon-ref-date').val().trim();
+      moon.refDate   = _v($(this).find('.calt-moon-ref-date'));
       moon.refPhaseIndex = parseInt($(this).find('.calt-moon-ref-phase').val(), 10) || 0;
       moon.phases = [];
       $(this).find('.calt-phase-row').each(function() {
         moon.phases.push({
-          name: $(this).find('[data-field="name"]').val().trim(),
+          name: _v($(this).find('[data-field="name"]')),
           days: Math.max(1, parseInt($(this).find('[data-field="days"]').val(), 10) || 1),
-          note: $(this).find('[data-field="note"]').val().trim(),
+          note: _v($(this).find('[data-field="note"]')),
         });
       });
     });
@@ -740,7 +743,7 @@
             <span id="calt_depth_val" style="font-size:12px;color:#fbbf24;min-width:18px;text-align:right">0</span>
           </div>
           <div style="font-size:10px;color:#3d4a60;margin-top:1px">0 = конец промпта · 5 = за 5 сообщениями</div>
-          <button onclick="window._caltOpen()" style="width:100%;margin-top:8px;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.3);border-radius:6px;color:#fbbf24;font-size:13px;font-weight:700;padding:10px 14px;cursor:pointer;font-family:inherit;text-align:center;min-height:44px;" id="calt_open_btn">📖 Открыть календарь</button>
+          <button class="calt-open-btn" id="calt_open_btn">📖 Открыть календарь</button>
           <div class="calt-sec" id="calt_conn_wrap">
             <div class="calt-sec-hdr" id="calt_conn_hdr"><span class="calt-sec-chev" id="calt_conn_chev">▸</span><span>🔌 Подключение</span></div>
             <div class="calt-sec-body" id="calt_conn_body" style="display:none">
@@ -781,6 +784,7 @@
         $s.css('color','#34d399').text('✅ ' + r.trim().slice(0,50));
       } catch(e) { $s.css('color','#f87171').text('✗ ' + e.message); }
     });
+    $('#calt_open_btn').on('click', openModal);
     bindPanelDate3();
   }
 
@@ -868,18 +872,9 @@
   // ─── Modal ────────────────────────────────────────────────────────────────
   // Pattern copied from v1.1 (the last known-working version on mobile).
   // Dynamic creation on first click, show/hide via calt-mopen class, z-index 99999.
-  function _showModal() {
-    const el = document.getElementById('calt_modal');
-    if (el) el.style.display = 'flex';
-  }
-  function _hideModal() {
-    const el = document.getElementById('calt_modal');
-    if (el) el.style.display = 'none';
-  }
-  function _isModalOpen() {
-    const el = document.getElementById('calt_modal');
-    return el && el.style.display === 'flex';
-  }
+  function _showModal() { $('#calt_modal').addClass('calt-mopen'); }
+  function _hideModal()  { $('#calt_modal').removeClass('calt-mopen'); }
+  function _isModalOpen(){ return $('#calt_modal').hasClass('calt-mopen'); }
 
   function openModal() {
     if ($('#calt_modal').length) {
@@ -889,7 +884,7 @@
     }
 
     $('body').append(`
-      <div class="calt-modal" id="calt_modal" style="display:none">
+      <div class="calt-modal" id="calt_modal">
         <div class="calt-modal-inner">
           <div class="calt-drag-handle"></div>
           <div class="calt-modal-hdr">
@@ -1307,7 +1302,7 @@
       + secWrap('notes','📝','Заметки','', notesHtml)
       + '<div class="calt-rules-actions">'
       + '<button class="menu_button calt-scan-btn" id="calt_rules_extract_btn">✦ Извлечь из лорбука</button>'
-      + '<button onclick="window._caltSaveRules()" class="menu_button calt-rules-save-btn" id="calt_rules_save_btn">💾 Сохранить</button>'
+      + '<button class="menu_button calt-rules-save-btn" id="calt_rules_save_btn">💾 Сохранить</button>'
       + '</div>'
       + '<div class="calt-scan-status" id="calt_scan_rules_status"></div>'
       + '</div>';
@@ -1577,6 +1572,24 @@
         () => { syncDraftFromDOM(); }
       );
 
+    // Save rules
+    $('#calt_rules_save_btn').off('click').on('click', async () => {
+      syncDraftFromDOM();
+      const s = getSettings();
+      s.calendarConfig = JSON.parse(JSON.stringify(_cfgDraft));
+      s.calendarRules  = $('#calt_rules_edit').val();
+      _cfgDirty = false; updateDirtyBadge();
+      clearDraftFromSession();
+      save(); await updatePrompt();
+      // Refresh month dropdowns everywhere now that config changed
+      syncModalDate();
+      renderDate3('#calt_date3_panel','calt_p_day','calt_p_month','calt_p_year',
+        s.currentDay, s.currentMonthName, s.currentYear);
+      bindPanelDate3();
+      toast('Правила сохранены', '#a78bfa');
+      $('#calt_scan_rules_status').css('color','#34d399').text('✅ Сохранено');
+    });
+
     // Extract calendar rules from lorebook
     $('#calt_rules_extract_btn').off('click').on('click', async function() {
       const $btn = $(this), $st = $('#calt_scan_rules_status');
@@ -1839,25 +1852,6 @@
       }
     });
   }
-
-  // ─── Global handle so inline onclick= on buttons can reach openModal ─────
-  window._caltOpen = function() { openModal(); };
-  window._caltSaveRules = async function() {
-    if (activeTab !== 'rules') return;
-    syncDraftFromDOM();
-    const s = getSettings();
-    s.calendarConfig = JSON.parse(JSON.stringify(_cfgDraft));
-    s.calendarRules  = $('#calt_rules_edit').val();
-    _cfgDirty = false; updateDirtyBadge();
-    clearDraftFromSession();
-    save(); await updatePrompt();
-    syncModalDate();
-    renderDate3('#calt_date3_panel','calt_p_day','calt_p_month','calt_p_year',
-      s.currentDay, s.currentMonthName, s.currentYear);
-    bindPanelDate3();
-    toast('Правила сохранены', '#a78bfa');
-    $('#calt_scan_rules_status').css('color','#34d399').text('✅ Сохранено');
-  };
 
   // ─── Boot ─────────────────────────────────────────────────────────────────
   jQuery(() => {
