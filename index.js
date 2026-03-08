@@ -781,12 +781,22 @@
         $s.css('color','#34d399').text('✅ ' + r.trim().slice(0,50));
       } catch(e) { $s.css('color','#f87171').text('✗ ' + e.message); }
     });
-    // Fetish Manager pattern: document-level delegation with touchend for mobile ST
-    $(document).on('click touchend', '#calt_open_btn', function(e) {
-      e.preventDefault();
-      e.stopPropagation();
-      openModal();
-    });
+    // Direct binding — document-level delegation is unreliable on mobile ST
+    // because parent elements may call stopPropagation on touchend before it reaches document.
+    // touchend fires first → preventDefault suppresses the subsequent synthetic click.
+    // click fires on desktop (no prior touchend).
+    $('#calt_open_btn')
+      .off('touchend.calt click.calt')
+      .on('touchend.calt', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openModal();
+      })
+      .on('click.calt', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        openModal();
+      });
     bindPanelDate3();
   }
 
@@ -1583,23 +1593,26 @@
         () => { syncDraftFromDOM(); }
       );
 
-    // Save rules
-    $('#calt_rules_save_btn').off('click').on('click', async () => {
-      syncDraftFromDOM();
-      const s = getSettings();
-      s.calendarConfig = JSON.parse(JSON.stringify(_cfgDraft));
-      s.calendarRules  = $('#calt_rules_edit').val();
-      _cfgDirty = false; updateDirtyBadge();
-      clearDraftFromSession();
-      save(); await updatePrompt();
-      // Refresh month dropdowns everywhere now that config changed
-      syncModalDate();
-      renderDate3('#calt_date3_panel','calt_p_day','calt_p_month','calt_p_year',
-        s.currentDay, s.currentMonthName, s.currentYear);
-      bindPanelDate3();
-      toast('Правила сохранены', '#a78bfa');
-      $('#calt_scan_rules_status').css('color','#34d399').text('✅ Сохранено');
-    });
+    // Save rules — touchend fires first on mobile (preventDefault suppresses subsequent click).
+    // click handles desktop where there is no prior touchend.
+    $('#calt_rules_save_btn').off('touchend.calt click.calt')
+      .on('touchend.calt click.calt', async function(e) {
+        if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
+        syncDraftFromDOM();
+        const s = getSettings();
+        s.calendarConfig = JSON.parse(JSON.stringify(_cfgDraft));
+        s.calendarRules  = $('#calt_rules_edit').val();
+        _cfgDirty = false; updateDirtyBadge();
+        clearDraftFromSession();
+        save(); await updatePrompt();
+        // Refresh month dropdowns everywhere now that config changed
+        syncModalDate();
+        renderDate3('#calt_date3_panel','calt_p_day','calt_p_month','calt_p_year',
+          s.currentDay, s.currentMonthName, s.currentYear);
+        bindPanelDate3();
+        toast('Правила сохранены', '#a78bfa');
+        $('#calt_scan_rules_status').css('color','#34d399').text('✅ Сохранено');
+      });
 
     // Extract calendar rules from lorebook
     $('#calt_rules_extract_btn').off('click').on('click', async function() {
