@@ -237,12 +237,16 @@
         if (raw < cum + pd) {
           const nextIdx = (i + 1) % moon.phases.length;
           results.push({
-            moonName:      moon.name,
-            nickname:      moon.nickname || '',
-            phaseName:     moon.phases[i].name,
-            phaseNote:     moon.phases[i].note || '',
-            daysRemaining: cum + pd - raw,
-            nextPhase:     moon.phases[nextIdx].name,
+            moonName:       moon.name,
+            nickname:       moon.nickname || '',
+            phaseName:      moon.phases[i].name,
+            phaseNote:      moon.phases[i].note || '',
+            phaseDays:      pd,
+            dayInPhase:     raw - cum + 1,
+            daysRemaining:  cum + pd - raw,
+            nextPhase:      moon.phases[nextIdx].name,
+            nextPhaseNote:  moon.phases[nextIdx].note || '',
+            nextPhaseDays:  Math.max(1, parseInt(moon.phases[nextIdx].days,10) || 1),
           });
           break;
         }
@@ -423,14 +427,36 @@
       });
     }
     if (cc.weekDays.length) {
-      lines.push('[Week: ' + cc.weekDays.map(d => d.name + (d.note ? '(' + d.note + ')' : '')).join(' · ') + ']');
+      const weekNames = cc.weekDays.map(d => d.name).join(' · ');
+      lines.push('[Week: ' + weekNames + ']');
+      // Current day's note only
+      const absDay2 = getCurrentAbsDay();
+      if (absDay2 !== null) {
+        const dow = getDayOfWeek(absDay2);
+        if (dow && dow.note) lines.push('[TODAY ' + dow.name + ': ' + dow.note + ']');
+      }
     }
-    // Moon phases: only current + next phase info (detailed cycle is in the date block)
+    // Moon phases: current+next detailed, rest names in cycle order
+    const absDay = getCurrentAbsDay();
+    const currentMoonPhases = absDay !== null ? getMoonPhases(absDay) : [];
     cc.moons.forEach(moon => {
-      if (!moon.name) return;
-      const pNames = moon.phases.map(p => p.name).join(' → ');
+      if (!moon.name || !moon.phases.length) return;
+      const mp = currentMoonPhases.find(m => m.moonName === moon.name);
+      const cycleNames = moon.phases.map(p => p.name).join(' → ');
       lines.push('[Moon ' + moon.name + (moon.nickname ? ' "' + moon.nickname + '"' : '') +
-        ': ' + (moon.cycleDays||28) + '-day cycle — phases: ' + pNames + ']');
+        ': ' + (moon.cycleDays||28) + '-day cycle: ' + cycleNames + ']');
+      if (mp) {
+        // Current phase with note
+        let curDetail = '[CURRENT PHASE: ' + mp.phaseName + ' — ' + mp.phaseDays + 'd';
+        if (mp.phaseNote) curDetail += ' | ' + mp.phaseNote;
+        curDetail += ']';
+        lines.push(curDetail);
+        // Next phase with note
+        let nextDetail = '[NEXT PHASE: ' + mp.nextPhase + ' — ' + mp.nextPhaseDays + 'd';
+        if (mp.nextPhaseNote) nextDetail += ' | ' + mp.nextPhaseNote;
+        nextDetail += ' (in ' + mp.daysRemaining + 'd)]';
+        lines.push(nextDetail);
+      }
     });
     if (s.calendarRules && s.calendarRules.trim()) lines.push(s.calendarRules.trim());
     return lines.join('\n');
@@ -458,11 +484,14 @@
           }
         }
         const dow = getDayOfWeek(absDay);
-        if (dow) lines.push('DAY OF WEEK: ' + dow.name + (dow.note ? ' (' + dow.note + ')' : ''));
+        if (dow) lines.push('DAY OF WEEK: ' + dow.name);
         getMoonPhases(absDay).forEach(mp => {
-          lines.push('MOON ' + mp.moonName + ': ' + mp.phaseName +
-            (mp.phaseNote ? ' — ' + mp.phaseNote : '') +
-            ' (~' + mp.daysRemaining + ' дн. до ' + mp.nextPhase + ')');
+          let moonLine = 'MOON ' + mp.moonName + (mp.nickname ? ' "' + mp.nickname + '"' : '') +
+            ': ' + mp.phaseName + ' (day ' + mp.dayInPhase + '/' + mp.phaseDays + ')';
+          if (mp.phaseNote) moonLine += ' — ' + mp.phaseNote;
+          moonLine += ' → ' + mp.daysRemaining + 'd to ' + mp.nextPhase;
+          if (mp.nextPhaseNote) moonLine += ' (' + mp.nextPhaseNote + ')';
+          lines.push(moonLine);
         });
       }
     }
@@ -492,13 +521,22 @@
       lines.push('KEY EVENTS (current period):');
       hotEvents.forEach(e => {
         const pin = (e.pinned && extractMonth(e.date) !== cm) ? ' [📌]' : '';
-        lines.push('• ' + (e.date ? '[' + e.date + '] ' : '') + e.text + pin);
+        const tagStr = (e.tags && e.tags.length)
+          ? ' [' + e.tags.map(k => { const t = tagByKey(k); return t ? t.key.toUpperCase() : ''; }).filter(Boolean).join('/') + ']'
+          : '';
+        lines.push('• ' + (e.date ? '[' + e.date + ']' : '') + tagStr + ' ' + e.text + pin);
       });
     }
 
-    // WARM layer — summaries for past months
+    // WARM layer — summaries for past months (sorted chronologically)
     const warmMonths = Object.keys(s.monthSummaries)
       .filter(m => !isMonthHot(m) && s.monthSummaries[m]?.trim());
+    // Sort by month order in calendar config
+    warmMonths.sort((a, b) => {
+      const ai = cc.months.findIndex(m => m.name.toLowerCase() === a.toLowerCase());
+      const bi = cc.months.findIndex(m => m.name.toLowerCase() === b.toLowerCase());
+      return (ai < 0 ? 999 : ai) - (bi < 0 ? 999 : bi);
+    });
     if (warmMonths.length) {
       lines.push('PAST PERIODS (summary):');
       warmMonths.forEach(m => lines.push('• [' + m + '] ' + s.monthSummaries[m].trim()));
@@ -1224,15 +1262,21 @@
       const parts = [];
       const dow = getDayOfWeek(absDay);
       if (dow) parts.push(dow.name + (dow.note ? ' (' + dow.note + ')' : ''));
-      getMoonPhases(absDay).forEach(mp =>
-        parts.push('🌙 ' + mp.phaseName + ' (~' + mp.daysRemaining + ' до ' + mp.nextPhase + ')')
-      );
+      getMoonPhases(absDay).forEach(mp => {
+        let moonStr = '🌙 ' + mp.phaseName + ' (' + mp.dayInPhase + '/' + mp.phaseDays + ')';
+        if (mp.phaseNote) moonStr += ' — ' + mp.phaseNote;
+        moonStr += ' · ~' + mp.daysRemaining + 'д → ' + mp.nextPhase;
+        parts.push(moonStr);
+      });
       if (parts.length) calInfoHtml = '<div class="calt-cal-info">' + parts.join(' · ') + '</div>';
     }
 
     // Filter events
     const filtered = s.keyEvents.filter(e => {
-      if (_searchQuery && !(e.text + ' ' + e.date).toLowerCase().includes(_searchQuery.toLowerCase())) return false;
+      if (_searchQuery) {
+        const tagLabels = (e.tags||[]).map(k => { const t = tagByKey(k); return t ? t.label : ''; }).join(' ');
+        if (!(e.text + ' ' + e.date + ' ' + tagLabels).toLowerCase().includes(_searchQuery.toLowerCase())) return false;
+      }
       if (_tagFilter && !(e.tags||[]).includes(_tagFilter)) return false;
       return true;
     });
@@ -1250,6 +1294,20 @@
         if (!groups[m]) { groups[m] = []; order.push(m); }
         groups[m].push(e);
       });
+      // Sort within each group by day (chronological)
+      Object.values(groups).forEach(arr => {
+        arr.sort((a, b) => {
+          const pa = parseDateString(a.date), pb = parseDateString(b.date);
+          const da = parseInt(pa.day, 10) || 0, db = parseInt(pb.day, 10) || 0;
+          return da - db;
+        });
+      });
+      // Move "— Без даты" to end
+      const ndi = order.indexOf('— Без даты');
+      if (ndi > -1 && ndi < order.length - 1) {
+        order.splice(ndi, 1);
+        order.push('— Без даты');
+      }
       order.forEach(month => {
         const hot = isMonthHot(month), coll = !!_collapsedMonths[month];
         const summ = s.monthSummaries[month] || '';
