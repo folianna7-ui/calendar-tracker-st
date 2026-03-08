@@ -1861,7 +1861,6 @@
         if (_isModalOpen()) _hideModal();
         else openModal();
       }
-      }
     });
   }
 
