@@ -440,7 +440,7 @@
 
   function buildRulesPromptText() {
     const s = getSettings(), cc = s.calendarConfig;
-    const lines = [];
+    const lines = ['[CALENDAR_RULES_START]'];
     // Current date + position + day of week + moon
     if (s.currentDate) {
       lines.push('CURRENT DATE: ' + s.currentDate);
@@ -466,20 +466,15 @@
         });
       }
     }
-    // Current month atmosphere
-    const cm = currentMonth();
-    if (cm) {
-      const curMo = cc.months.find(m => m.name.toLowerCase() === cm.toLowerCase());
-      if (curMo && curMo.recurringNote) lines.push('MONTH ATMOSPHERE: ' + curMo.recurringNote);
-    }
     const rules = buildCalendarRulesText();
-    if (rules) { lines.push('CALENDAR RULES:'); lines.push(rules); }
+    if (rules) lines.push(rules);
+    lines.push('[CALENDAR_RULES_END]');
     return lines.join('\n');
   }
 
   function buildTimelinePromptText() {
     const s = getSettings(), cc = s.calendarConfig, cm = currentMonth();
-    const lines = ['[TIMELINE]'];
+    const lines = ['[TIMELINE_START]'];
 
     // HOT layer — sorted chronologically
     const hotEvents = s.keyEvents
@@ -533,6 +528,7 @@
         }
       }
     }
+    lines.push('[TIMELINE_END]');
     return lines.join('\n');
   }
 
@@ -540,16 +536,38 @@
     const s = getSettings();
     const hotDls = s.deadlines.filter(e => isDeadlineHot(e));
     if (!hotDls.length) return '';
-    const cm = currentMonth();
-    const lines = ['[UPCOMING]'];
+    const curAbs = getCurrentAbsDay();
+    // Sort by proximity: closest deadline first
+    hotDls.sort((a, b) => {
+      const pa = parseDateString(a.date), pb = parseDateString(b.date);
+      const aa = dateToAbsDay(pa.day, pa.month, pa.year || s.currentYear);
+      const ab = dateToAbsDay(pb.day, pb.month, pb.year || s.currentYear);
+      if (aa !== null && ab !== null) return aa - ab;
+      if (aa !== null) return -1;
+      if (ab !== null) return  1;
+      return 0;
+    });
+    const lines = ['[UPCOMING_START]'];
     hotDls.forEach(e => {
       const dt = dlTypeByKey(e.dtype);
-      const approaching = cm && extractMonth(e.date) === cm;
       const titlePart = e.title ? e.title + ': ' : '';
       const pinTag = e.pinned ? ' [📌]' : '';
-      lines.push('• ' + dt.promptPrefix + ' ' + (e.date ? '[' + e.date + '] ' : '') + titlePart + e.text +
-        (approaching ? ' ⚠ APPROACHING' : '') + pinTag);
+      // Calculate days-until for urgency
+      let urgency = '';
+      if (curAbs !== null) {
+        const p = parseDateString(e.date);
+        const dlAbs = dateToAbsDay(p.day, p.month, p.year || s.currentYear);
+        if (dlAbs !== null) {
+          const diff = dlAbs - curAbs;
+          if (diff < 0)      urgency = ' (OVERDUE ' + Math.abs(diff) + 'd)';
+          else if (diff === 0) urgency = ' (TODAY!)';
+          else if (diff <= 3)  urgency = ' (IN ' + diff + ' DAY' + (diff > 1 ? 'S' : '') + '!)';
+          else                 urgency = ' (in ' + diff + ' days)';
+        }
+      }
+      lines.push('• ' + dt.promptPrefix + ' ' + (e.date ? '[' + e.date + '] ' : '') + titlePart + e.text + urgency + pinTag);
     });
+    lines.push('[UPCOMING_END]');
     return lines.join('\n');
   }
 
@@ -593,11 +611,20 @@
     updateTokenCounter();
   }
 
+  // Token estimation: ~4 chars/token for Latin, ~2 chars/token for Cyrillic
+  function estimateTokens(text) {
+    if (!text) return 0;
+    const cyrCount = (text.match(/[\u0400-\u04FF]/g) || []).length;
+    const total = text.length;
+    const latCount = total - cyrCount;
+    return Math.ceil(latCount / 4 + cyrCount / 2);
+  }
+
   function updateTokenCounter() {
     if (_promptActive) {
-      const rT = Math.ceil(buildRulesPromptText().length / 4);
-      const tT = Math.ceil(buildTimelinePromptText().length / 4);
-      const dT = Math.ceil(buildDeadlinesPromptText().length / 4);
+      const rT = estimateTokens(buildRulesPromptText());
+      const tT = estimateTokens(buildTimelinePromptText());
+      const dT = estimateTokens(buildDeadlinesPromptText());
       const total = rT + tT + dT;
       $('#calt_modal_tokens').html(
         '<span style="color:#a78bfa">📜' + rT + '</span> · ' +
@@ -742,12 +769,30 @@
       'CHAT:\n' + (getChatContext(depth)||'(empty)') +
         (lore ? '\n\nLOREBOOK:\n' + lore.slice(0,3000) : '') +
         '\n\nList upcoming events:',
-      'Extract UPCOMING FUTURE EVENTS only. OUTPUT: [DATE] Brief description\n' +
-        'RULES: only future, preserve existing, add new ones only.\n\n' +
-        (existing ? 'EXISTING:\n' + existing + '\n\n' : '') +
+      'Extract UPCOMING/ONGOING situations that affect future decisions.\n\n' +
+        'RULES:\n' +
+        '- ONE line per item: [DATE] What is pending/looming (MAX 12 words)\n' +
+        '- DATE = specific future date if known, or "ongoing" if no date\n' +
+        '- RECORD ONLY: threats, deadlines, scheduled events, unresolved dangers, pending quests\n' +
+        '- NEVER describe past events — only what WILL or MIGHT happen\n' +
+        '- NEVER retell scenes or add emotional detail\n' +
+        '- Preserve all existing items unchanged\n\n' +
+        'GOOD: [ongoing] Council Inquisitor Nae still at Academy; risk of exposure\n' +
+        'GOOD: [37 Caldeth 2027] Year\'s Last Breath festival\n' +
+        'BAD: Selena raises concerns about the lack of protection during intimacy bringing up questions\n\n' +
+        (existing ? 'EXISTING (keep all):\n' + existing + '\n\n' : '') +
         (past ? 'ALREADY HAPPENED (exclude):\n' + past : '')
     );
-    return parseEventList(result, s.nextDeadlineId);
+    let parsed = parseEventList(result, s.nextDeadlineId);
+    // Post-process: truncate oversized deadlines
+    parsed.forEach(e => {
+      if (e.text.length > 100) {
+        const dot = e.text.indexOf('. ');
+        if (dot > 0 && dot < 90) e.text = e.text.slice(0, dot + 1);
+        else e.text = e.text.slice(0, 97) + '...';
+      }
+    });
+    return parsed;
   }
 
   async function generateMonthSummary(month) {
@@ -1285,12 +1330,31 @@
     if (!s.deadlines.length) {
       listHtml = '<div class="calt-empty">Дедлайнов нет.</div>';
     } else {
+      // Helper: compute days-until for a deadline
+      const curAbs = getCurrentAbsDay();
+      function dlDaysUntil(e) {
+        if (curAbs === null) return null;
+        const p = parseDateString(e.date);
+        if (!p.day || !p.month) return null;
+        const dlAbs = dateToAbsDay(p.day, p.month, p.year || s.currentYear);
+        return dlAbs !== null ? dlAbs - curAbs : null;
+      }
       // Group by month
       const groups = {}, order = [];
       s.deadlines.forEach(e => {
         const m = extractMonth(e.date) || '— Без даты';
         if (!groups[m]) { groups[m] = []; order.push(m); }
         groups[m].push(e);
+      });
+      // Sort within each group by day (closest first)
+      Object.values(groups).forEach(arr => {
+        arr.sort((a, b) => {
+          const da = dlDaysUntil(a), db = dlDaysUntil(b);
+          if (da !== null && db !== null) return da - db;
+          if (da !== null) return -1;
+          if (db !== null) return  1;
+          return 0;
+        });
       });
       order.forEach(month => {
         listHtml += '<div class="calt-month-group">'
@@ -1303,7 +1367,8 @@
         groups[month].forEach(e => {
           const hot = isDeadlineHot(e);
           const dt = dlTypeByKey(e.dtype);
-          const approaching = cm && extractMonth(e.date) === cm;
+          const daysUntil = dlDaysUntil(e);
+          const approaching = daysUntil !== null && daysUntil >= 0 && daysUntil <= 3;
           const dateBadge = e.date
             ? '<span class="calt-ev-date' + (approaching ? ' calt-ev-date-urgent' : '') + '">' + (approaching?'⚠ ':'') + esc(e.date) + '</span>'
             : '<span class="calt-ev-date calt-ev-date-empty">—</span>';
@@ -1313,28 +1378,16 @@
           if (e.pinned) {
             hotBadge = '<span class="calt-dl-hot-badge">📌 в контексте</span>';
           } else if (hot) {
-            // Show days until deadline if calculable
-            const curAbs = getCurrentAbsDay();
-            const p = parseDateString(e.date);
-            const dlYear = p.year || getSettings().currentYear;
-            const dlAbs = dateToAbsDay(p.day, p.month, dlYear);
-            if (curAbs !== null && dlAbs !== null) {
-              const diff = dlAbs - curAbs;
-              if (diff < 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● просрочен (' + Math.abs(diff) + 'дн)</span>';
-              else if (diff === 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● СЕГОДНЯ</span>';
-              else hotBadge = '<span class="calt-dl-hot-badge">● через ' + diff + 'дн</span>';
+            if (daysUntil !== null) {
+              if (daysUntil < 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● просрочен (' + Math.abs(daysUntil) + 'дн)</span>';
+              else if (daysUntil === 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● СЕГОДНЯ</span>';
+              else hotBadge = '<span class="calt-dl-hot-badge">● через ' + daysUntil + 'дн</span>';
             } else {
               hotBadge = '<span class="calt-dl-hot-badge">● нет даты</span>';
             }
           } else {
-            // Cold — show how far
-            const curAbs = getCurrentAbsDay();
-            const p = parseDateString(e.date);
-            const dlYear = p.year || getSettings().currentYear;
-            const dlAbs = dateToAbsDay(p.day, p.month, dlYear);
-            if (curAbs !== null && dlAbs !== null) {
-              const diff = dlAbs - curAbs;
-              hotBadge = '<span class="calt-dl-cold-badge">○ через ' + diff + 'дн</span>';
+            if (daysUntil !== null) {
+              hotBadge = '<span class="calt-dl-cold-badge">○ через ' + daysUntil + 'дн</span>';
             } else {
               hotBadge = '<span class="calt-dl-cold-badge">○ скрыт</span>';
             }
