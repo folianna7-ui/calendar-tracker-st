@@ -1122,7 +1122,7 @@
       + buildTagFilterBar()
       + '<div class="calt-list-wrap"><div class="calt-list" id="calt_ev_list">' + listHtml + '</div></div>'
       + '<div class="calt-add-row">'
-      + '<input class="calt-add-date" id="calt_add_ev_date" placeholder="Дата">'
+      + '<div class="calt-date3-row calt-add-date3" id="calt_add_ev_date3"></div>'
       + '<input class="calt-add-txt" id="calt_add_ev_txt" placeholder="Описание события...">'
       + '<button class="calt-add-btn" id="calt_add_ev_btn">+ Добавить</button>'
       + '</div>'
@@ -1437,12 +1437,18 @@
     });
 
     // ── Add event ─────────────────────────────────────────────────────────
+    // Render day/month/year picker into the add row
+    renderDate3('#calt_add_ev_date3', 'calt_add_ev_day', 'calt_add_ev_month', 'calt_add_ev_year', '', '', '');
     $('#calt_add_ev_btn').off('click').on('click', () => {
-      const date = $('#calt_add_ev_date').val().trim(), text = $('#calt_add_ev_txt').val().trim();
+      const d = $('#calt_add_ev_day').val().trim();
+      const m = $('#calt_add_ev_month').val().trim();
+      const y = $('#calt_add_ev_year').val().trim();
+      const date = buildDateString(d, m, y);
+      const text = $('#calt_add_ev_txt').val().trim();
       if (!text) { $('#calt_add_ev_txt').focus(); return; }
       const s = getSettings(); s.keyEvents.push({ id:s.nextEventId++, date, text, pinned:false, tags:[] });
       save(); updatePrompt(); updateMeta();
-      $('#calt_add_ev_date').val(''); $('#calt_add_ev_txt').val('');
+      $('#calt_add_ev_txt').val('');
       renderTabContent();
     });
     $('#calt_add_ev_txt').off('keydown').on('keydown', e => { if (e.key==='Enter') $('#calt_add_ev_btn').click(); });

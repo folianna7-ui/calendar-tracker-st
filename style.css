@@ -254,8 +254,10 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 /* ── Add row ────────────────────────────────────────────────── */
 .calt-add-row {
   display:flex; gap:6px; padding:8px 10px;
-  border-top:1px solid rgba(255,255,255,0.05); flex-shrink:0;
+  border-top:1px solid rgba(255,255,255,0.05); flex-shrink:0; flex-wrap:wrap;
 }
+/* date3 inside add row: sits inline, no extra margin */
+.calt-add-date3 { flex-shrink:0; display:flex; gap:4px; align-items:center; }
 .calt-add-date {
   width:110px; flex-shrink:0; background:#0d1117; border:1px solid rgba(255,255,255,0.09);
   border-radius:6px; color:#c9d1e0; padding:8px 10px; font-size:12px; font-family:inherit; outline:none;
@@ -441,8 +443,13 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
     transition: none !important;
   }
   .calt-drag-handle { display: none; }
-  .calt-modal-hdr { flex-wrap:wrap; gap:6px; }
-  .calt-modal-date-wrap { width:100%; }
+  /* Header: hide title text and token counter, keep icon + date + X */
+  .calt-modal-hdr { flex-wrap:nowrap; gap:6px; padding:8px 10px; align-items:center; }
+  .calt-modal-title { display:none; }
+  .calt-modal-tokens { display:none; }
+  .calt-modal-date-wrap { flex:1; min-width:0; gap:4px; }
+  .calt-modal-date-label { font-size:10px; }
+  .calt-modal-x { margin-left:auto; }
   .calt-date3-day  { width:50px; }
   .calt-date3-year { width:62px; }
   .calt-cfg-inp-sm { width:88px; }
