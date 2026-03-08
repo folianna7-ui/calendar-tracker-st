@@ -1,33 +1,28 @@
 /**
- * Calendar Tracker v4.0 — SillyTavern Extension
+ * Calendar Tracker v5.0 — SillyTavern Extension
  *
- * Fixes vs v3.0:
- *  [FIX]  Math.max on empty array → NaN id — now uses Math.max(0, ...)
- *  [FIX]  Rescan preserves tags + pinned via fuzzy text matching
- *  [FIX]  syncDraftFromDOM is top-level, called on every input — no data loss on blur
- *  [FIX]  Autoscan threshold: 10 → 3 messages
- *  [FIX]  Dead duplicate reorder handlers (click.mvmth/mvwd/mvph) removed
- *  [FIX]  Moon phase days=0 → Math.max(1,...) prevents infinite loop
- *  [FIX]  refPhaseIndex clamped to valid range
- *  [FIX]  scrollIntoView waits 200ms for slideDown to finish (was 150ms, anim is 160ms)
- *  [FIX]  CHAT_CHANGED syncs modal date + re-renders if modal is open
- *  [FIX]  Import recalculates nextEventId/nextDeadlineId safely
- *  [FIX]  Import resets _cfgDraft so Rules tab shows fresh calendarConfig
- *  [NEW]  SessionStorage draft autosave — survives page refresh, per-chat keyed
- *  [NEW]  Prompt active indicator: colored dot in settings header + modal token counter
- *  [NEW]  "Очистить данные" (🗑) button in modal footer with 8s undo window
- *  [NEW]  Hot events sorted chronologically in prompt
- *  [NEW]  DAY POSITION in prompt: "Day N of M in month · Day X of Y in year"
- *  [NEW]  TIME PASSED block between warm and deadlines layers
- *  [NEW]  Unsaved-draft inline hint in Rules tab footer
- *  [NEW]  Add buttons auto-expand their section on click
+ * Changes vs v4.0:
+ *  [NEW]  Three separate injection depths: Rules(0), Deadlines(1), Timeline(4)
+ *  [NEW]  Deadline types: Event/Threat/Plot with distinct prompt prefixes
+ *  [NEW]  Hot/cold deadlines: only within N-day horizon appear in context
+ *  [NEW]  Deadline pinning: force any deadline into context regardless of date
+ *  [NEW]  Deadline title field (optional) for short naming
+ *  [NEW]  Deadlines grouped by month (like Events tab)
+ *  [NEW]  Date3 picker (day/month/year) for deadlines (add + edit)
+ *  [NEW]  Token counter per section in modal: Rules · Timeline · Deadlines
+ *  [NEW]  Deadline horizon setting (default 7 days)
+ *  [FIX]  Mobile modal date fields sizing improved
+ *  [FIX]  Scan prompt hardened: max 15 words per event, examples, post-processing
+ *  [UPD]  "Ежегодные события" → "Атмосфера месяца" in Rules
+ *  [UPD]  Calendar rules prompt: only current+next month detailed, rest names only
+ *  [UPD]  Moon phases in prompt: phase names only (detailed notes removed)
  */
 
 (() => {
   'use strict';
 
   const MODULE_KEY   = 'calendar_tracker';
-  const DRAFT_SS_KEY = 'calt_cfg_draft_v4';
+  const DRAFT_SS_KEY = 'calt_cfg_draft_v5';
 
   // ─── Module state ─────────────────────────────────────────────────────────
   let activeTab          = 'events';
@@ -93,6 +88,14 @@
              weekRefDate:'', weekRefDayIndex:0, moons:[] };
   }
 
+  // ─── Deadline type tags ────────────────────────────────────────────────
+  const DEADLINE_TYPES = [
+    { key: 'event',  label: '🎭 Ивент',  color: '#a78bfa', promptPrefix: '🎭 EVENT' },
+    { key: 'threat', label: '🔴 Угроза', color: '#ef4444', promptPrefix: '⚠ THREAT' },
+    { key: 'plot',   label: '📋 Сюжет',  color: '#60a5fa', promptPrefix: '📋 PLOT' },
+  ];
+  function dlTypeByKey(k) { return DEADLINE_TYPES.find(t => t.key === k) || DEADLINE_TYPES[0]; }
+
   function defaultSettings() {
     return {
       enabled: true,
@@ -100,7 +103,9 @@
       keyEvents:[], deadlines:[],
       calendarRules:'',
       calendarConfig: defaultCalendarConfig(),
-      autoScan:false, scanDepth:20, injectionDepth:0,
+      autoScan:false, scanDepth:20,
+      depthRules:0, depthDeadlines:1, depthTimeline:4,
+      deadlineHorizon:7,
       monthSummaries:{}, monthSummarySnaps:{},
       manualHotMonths:[], manualColdMonths:[],
       nextEventId:1, nextDeadlineId:1,
@@ -135,6 +140,11 @@
     s.nextEventId    = Math.max(0, s.nextEventId || 0, ...evIds) + (evIds.length ? 0 : 1);
     s.nextDeadlineId = Math.max(0, s.nextDeadlineId || 0, ...dlIds) + (dlIds.length ? 0 : 1);
     if (s.injectionDepth === undefined) s.injectionDepth = 0;
+    // Migrate old single injectionDepth to three-depth system
+    if (s.depthRules === undefined) s.depthRules = 0;
+    if (s.depthDeadlines === undefined) s.depthDeadlines = 1;
+    if (s.depthTimeline === undefined) s.depthTimeline = 4;
+    if (s.deadlineHorizon === undefined) s.deadlineHorizon = 7;
     if (!s.calendarConfig || typeof s.calendarConfig !== 'object') s.calendarConfig = defaultCalendarConfig();
     const cc = s.calendarConfig;
     if (!Array.isArray(cc.months))   cc.months   = [];
@@ -144,6 +154,11 @@
     s.keyEvents.forEach(e => {
       if (e.pinned === undefined) e.pinned = false;
       if (!Array.isArray(e.tags)) e.tags = [];
+    });
+    s.deadlines.forEach(e => {
+      if (e.pinned === undefined) e.pinned = false;
+      if (e.title === undefined) e.title = '';
+      if (e.dtype === undefined) e.dtype = 'event';
     });
     // Migrate: split currentDate into three fields if needed
     if (s.currentDate && !s.currentDay && !s.currentMonthName) {
@@ -260,6 +275,19 @@
     return !!(cm && month === cm);
   }
 
+  function isDeadlineHot(deadline) {
+    if (deadline.pinned) return true;
+    const s = getSettings();
+    const horizon = s.deadlineHorizon || 7;
+    const curAbs = getCurrentAbsDay();
+    if (curAbs === null) return true; // no date info — show everything
+    const p = parseDateString(deadline.date);
+    const dlAbs = dateToAbsDay(p.day, p.month, p.year);
+    if (dlAbs === null) return true; // no parsable date — treat as hot
+    const diff = dlAbs - curAbs;
+    return diff <= horizon; // includes past deadlines and those within horizon
+  }
+
   // ─── Draft autosave (sessionStorage) ─────────────────────────────────────
   function _chatKey() {
     try {
@@ -365,43 +393,55 @@
   // ─── Prompt building ──────────────────────────────────────────────────────
   function buildCalendarRulesText() {
     const s = getSettings(), cc = s.calendarConfig;
+    const cm = (s.currentMonthName || '').toLowerCase();
     const lines = [];
     if (cc.name) lines.push('[Calendar: ' + cc.name + ']');
     if (cc.era)  lines.push('[Era: ' + cc.era + (cc.eraFrom ? ' — ' + cc.eraFrom : '') + ']');
     if (cc.months.length) {
-      const seasons = {}, ord = [];
-      cc.months.forEach(m => {
-        const sn = m.season || '—';
-        if (!seasons[sn]) { seasons[sn] = []; ord.push(sn); }
-        seasons[sn].push(m.name + '(' + (m.days||30) + 'd' + (m.recurringNote ? '; ' + m.recurringNote : '') + ')');
+      // Find current month index
+      const cmIdx = cc.months.findIndex(m => m.name.toLowerCase() === cm);
+      const nextIdx = cmIdx >= 0 ? (cmIdx + 1) % cc.months.length : -1;
+      // Detailed info: current + next month
+      const detailedSet = new Set();
+      if (cmIdx >= 0) detailedSet.add(cmIdx);
+      if (nextIdx >= 0) detailedSet.add(nextIdx);
+      // Full list of month names for ordering context
+      const allNames = cc.months.map(m => m.name).join(', ');
+      lines.push('[Month order: ' + allNames + ']');
+      // Detailed months
+      detailedSet.forEach(i => {
+        const m = cc.months[i];
+        const tag = i === cmIdx ? 'CURRENT' : 'NEXT';
+        let detail = '[' + tag + ' MONTH: ' + m.name + ' — ' + (m.days||30) + ' days, ' + (m.season||'—');
+        if (m.recurringNote) detail += ' | Atmosphere: ' + m.recurringNote;
+        detail += ']';
+        lines.push(detail);
       });
-      lines.push('[Months: ' + ord.map(sn => sn + ': ' + seasons[sn].join(', ')).join(' | ') + ']');
     }
     if (cc.weekDays.length) {
       lines.push('[Week: ' + cc.weekDays.map(d => d.name + (d.note ? '(' + d.note + ')' : '')).join(' · ') + ']');
     }
+    // Moon phases: only current + next phase info (detailed cycle is in the date block)
     cc.moons.forEach(moon => {
       if (!moon.name) return;
-      const phStr = moon.phases
-        .map(p => p.name + '~' + Math.max(1, parseInt(p.days,10)||1) + 'd' + (p.note ? ': ' + p.note : ''))
-        .join(' · ');
+      const pNames = moon.phases.map(p => p.name).join(' → ');
       lines.push('[Moon ' + moon.name + (moon.nickname ? ' "' + moon.nickname + '"' : '') +
-        ': ' + (moon.cycleDays||28) + '-day cycle — ' + phStr + ']');
+        ': ' + (moon.cycleDays||28) + '-day cycle — phases: ' + pNames + ']');
     });
     if (s.calendarRules && s.calendarRules.trim()) lines.push(s.calendarRules.trim());
     return lines.join('\n');
   }
 
-  function buildPromptText() {
-    const s = getSettings(), cc = s.calendarConfig, cm = currentMonth();
-    const lines = ['[TIMELINE]'];
+  // ── Three prompt section builders (for separate injection depths) ──────
 
-    // ── Current date block ────────────────────────────────────────────────
+  function buildRulesPromptText() {
+    const s = getSettings(), cc = s.calendarConfig;
+    const lines = [];
+    // Current date + position + day of week + moon
     if (s.currentDate) {
       lines.push('CURRENT DATE: ' + s.currentDate);
       const absDay = getCurrentAbsDay();
       if (absDay !== null) {
-        // Day position in month and year
         if (cc.months.length) {
           const mi = cc.months.findIndex(m => m.name.toLowerCase() === (s.currentMonthName||'').toLowerCase());
           if (mi >= 0) {
@@ -413,10 +453,8 @@
               ' · ' + (dbm + d) + ' of ' + dpy + ' in year');
           }
         }
-        // Day of week
         const dow = getDayOfWeek(absDay);
         if (dow) lines.push('DAY OF WEEK: ' + dow.name + (dow.note ? ' (' + dow.note + ')' : ''));
-        // Moon phases
         getMoonPhases(absDay).forEach(mp => {
           lines.push('MOON ' + mp.moonName + ': ' + mp.phaseName +
             (mp.phaseNote ? ' — ' + mp.phaseNote : '') +
@@ -424,14 +462,22 @@
         });
       }
     }
-
-    // ── Current month recurring note ──────────────────────────────────────
+    // Current month atmosphere
+    const cm = currentMonth();
     if (cm) {
       const curMo = cc.months.find(m => m.name.toLowerCase() === cm.toLowerCase());
-      if (curMo && curMo.recurringNote) lines.push('THIS PERIOD: ' + curMo.recurringNote);
+      if (curMo && curMo.recurringNote) lines.push('MONTH ATMOSPHERE: ' + curMo.recurringNote);
     }
+    const rules = buildCalendarRulesText();
+    if (rules) { lines.push('CALENDAR RULES:'); lines.push(rules); }
+    return lines.join('\n');
+  }
 
-    // ── HOT layer — sorted chronologically ────────────────────────────────
+  function buildTimelinePromptText() {
+    const s = getSettings(), cc = s.calendarConfig, cm = currentMonth();
+    const lines = ['[TIMELINE]'];
+
+    // HOT layer — sorted chronologically
     const hotEvents = s.keyEvents
       .filter(e => e.pinned || isMonthHot(extractMonth(e.date) || ''))
       .sort((a, b) => {
@@ -451,7 +497,7 @@
       });
     }
 
-    // ── WARM layer — summaries for past months ────────────────────────────
+    // WARM layer — summaries for past months
     const warmMonths = Object.keys(s.monthSummaries)
       .filter(m => !isMonthHot(m) && s.monthSummaries[m]?.trim());
     if (warmMonths.length) {
@@ -459,11 +505,10 @@
       warmMonths.forEach(m => lines.push('• [' + m + '] ' + s.monthSummaries[m].trim()));
     }
 
-    // ── TIME PASSED — gap between latest past data and current month ──────
+    // TIME PASSED
     if (cm && cc.months.length) {
       const currentMonthIdx = cc.months.findIndex(m => m.name.toLowerCase() === cm.toLowerCase());
       if (currentMonthIdx > 0) {
-        // All months that have any events or summaries, excluding hot
         const pastMonthSet = new Set([
           ...Object.keys(s.monthSummaries).filter(m => s.monthSummaries[m]?.trim()),
           ...s.keyEvents.map(e => extractMonth(e.date)).filter(Boolean),
@@ -474,7 +519,6 @@
             idx: cc.months.findIndex(m => m.name.toLowerCase() === name.toLowerCase()),
           }))
           .filter(m => m.idx >= 0 && m.idx < currentMonthIdx && !isMonthHot(m.name));
-
         if (pastWithIdx.length) {
           const latestPast = pastWithIdx.reduce((a, b) => a.idx > b.idx ? a : b);
           const gap = currentMonthIdx - latestPast.idx - 1;
@@ -485,19 +529,29 @@
         }
       }
     }
-
-    // ── Deadlines ─────────────────────────────────────────────────────────
-    if (s.deadlines.length) {
-      lines.push('UPCOMING EVENTS:');
-      s.deadlines.forEach(e => {
-        const approaching = cm && extractMonth(e.date) === cm;
-        lines.push('• ' + (e.date ? '[' + e.date + '] ' : '') + e.text + (approaching ? ' ⚠ APPROACHING' : ''));
-      });
-    }
-
-    const rules = buildCalendarRulesText();
-    if (rules) { lines.push('CALENDAR RULES:'); lines.push(rules); }
     return lines.join('\n');
+  }
+
+  function buildDeadlinesPromptText() {
+    const s = getSettings();
+    const hotDls = s.deadlines.filter(e => isDeadlineHot(e));
+    if (!hotDls.length) return '';
+    const cm = currentMonth();
+    const lines = ['[UPCOMING]'];
+    hotDls.forEach(e => {
+      const dt = dlTypeByKey(e.dtype);
+      const approaching = cm && extractMonth(e.date) === cm;
+      const titlePart = e.title ? e.title + ': ' : '';
+      const pinTag = e.pinned ? ' [📌]' : '';
+      lines.push('• ' + dt.promptPrefix + ' ' + (e.date ? '[' + e.date + '] ' : '') + titlePart + e.text +
+        (approaching ? ' ⚠ APPROACHING' : '') + pinTag);
+    });
+    return lines.join('\n');
+  }
+
+  // Legacy combined builder (used for token counting)
+  function buildPromptText() {
+    return [buildRulesPromptText(), buildTimelinePromptText(), buildDeadlinesPromptText()].filter(Boolean).join('\n\n');
   }
 
   async function updatePrompt() {
@@ -507,12 +561,23 @@
     const cc = s.calendarConfig || {};
     const hasContent = s.currentDate || s.keyEvents.length || s.deadlines.length ||
       s.calendarRules || cc.name || cc.months.length;
+    const pt = extension_prompt_types?.IN_PROMPT ?? 0;
     if (!s.enabled || !hasContent) {
-      setExtensionPrompt(MODULE_KEY, '', extension_prompt_types?.IN_PROMPT ?? 0, 0);
+      setExtensionPrompt(MODULE_KEY + '_rules', '', pt, 0);
+      setExtensionPrompt(MODULE_KEY + '_timeline', '', pt, 0);
+      setExtensionPrompt(MODULE_KEY + '_deadlines', '', pt, 0);
+      // Clear legacy single key if it exists
+      setExtensionPrompt(MODULE_KEY, '', pt, 0);
       _promptActive = false;
     } else {
-      setExtensionPrompt(MODULE_KEY, buildPromptText(), extension_prompt_types?.IN_PROMPT ?? 0, s.injectionDepth||0);
-      _promptActive = true;
+      const rulesText    = buildRulesPromptText();
+      const timelineText = buildTimelinePromptText();
+      const deadlineText = buildDeadlinesPromptText();
+      setExtensionPrompt(MODULE_KEY + '_rules',     rulesText,    pt, s.depthRules    || 0);
+      setExtensionPrompt(MODULE_KEY + '_timeline',  timelineText, pt, s.depthTimeline  || 4);
+      setExtensionPrompt(MODULE_KEY + '_deadlines', deadlineText, pt, s.depthDeadlines || 1);
+      setExtensionPrompt(MODULE_KEY, '', pt, 0); // clear legacy
+      _promptActive = !!(rulesText || timelineText || deadlineText);
     }
     _updatePromptUI();
   }
@@ -526,8 +591,16 @@
 
   function updateTokenCounter() {
     if (_promptActive) {
-      const tc = Math.ceil(buildPromptText().length / 4);
-      $('#calt_modal_tokens').text('~' + tc + ' ткн').css('color','#34d399');
+      const rT = Math.ceil(buildRulesPromptText().length / 4);
+      const tT = Math.ceil(buildTimelinePromptText().length / 4);
+      const dT = Math.ceil(buildDeadlinesPromptText().length / 4);
+      const total = rT + tT + dT;
+      $('#calt_modal_tokens').html(
+        '<span style="color:#a78bfa">📜' + rT + '</span> · ' +
+        '<span style="color:#fbbf24">⚔' + tT + '</span> · ' +
+        '<span style="color:#60a5fa">⏳' + dT + '</span> · ' +
+        'Σ' + total
+      ).css('color','#34d399');
     } else {
       $('#calt_modal_tokens').text('○ выкл').css('color','#4a5568');
     }
@@ -626,14 +699,32 @@
       'CHAT:\n' + (getChatContext(depth)||'(empty)') +
         (lore ? '\n\nLOREBOOK:\n' + lore.slice(0,3000) : '') +
         '\n\nOutput complete consolidated timeline:',
-      'You are a chronicle archivist. Extract PLOT-CRITICAL past events.\n' +
-        'OUTPUT: one line per date: [DATE] Event summary\n' +
-        'RECORD: relationship/power changes, pacts, deaths, conflicts, rituals, revelations.\n' +
-        'SKIP: casual dialogue, minor emotional moments.\n' +
-        'CONSOLIDATE: update existing dates, never duplicate.\n\n' +
+      'You are a chronicle archivist. Extract ONLY plot-critical FACTS.\n\n' +
+        'RULES:\n' +
+        '- ONE line per event: [DATE] What changed (MAX 15 words)\n' +
+        '- RECORD ONLY: deaths, alliances, betrayals, discoveries, power shifts, pacts, injuries, escapes\n' +
+        '- NEVER retell scenes, emotions, dialogue, descriptions, atmosphere\n' +
+        '- NEVER summarize what characters did moment-by-moment\n' +
+        '- Each event = a PERMANENT CHANGE to the world state\n' +
+        '- CONSOLIDATE: if same date has related facts, merge into one line\n\n' +
+        'GOOD EXAMPLES:\n' +
+        '- [14 Nov 2027] DSO squad killed; Leon found Selena in lab\n' +
+        '- [3 Mar 1044] Kael betrayed the Council; fled to the Wastes\n' +
+        '- [9 Jun 1044] Blood pact sealed between Mira and the Hollow King\n\n' +
+        'BAD EXAMPLES (NEVER write like this):\n' +
+        '- [14 Nov] Leon enters the lab and discovers a survivor named Selena handcuffed to a case; they hide in a soundproof room from mutants\n' +
+        '- [3 Mar] Kael feels conflicted about his decision but ultimately chooses to leave\n\n' +
         (existing ? 'EXISTING:\n' + existing : 'No existing events.')
     );
-    const parsed = parseEventList(result, s.nextEventId);
+    let parsed = parseEventList(result, s.nextEventId);
+    // Post-process: truncate oversized events to ~120 chars
+    parsed.forEach(e => {
+      if (e.text.length > 120) {
+        const dot = e.text.indexOf('. ');
+        if (dot > 0 && dot < 110) e.text = e.text.slice(0, dot + 1);
+        else e.text = e.text.slice(0, 117) + '...';
+      }
+    });
     _restoreMetadata(parsed, s.keyEvents);
     return parsed;
   }
@@ -737,12 +828,28 @@
           <label class="calt-check-row"><input type="checkbox" id="calt_autoscan" style="accent-color:#fbbf24"><span>Авто-сканирование (каждые 3 сообщения)</span></label>
           <div class="calt-field-label">Текущая дата</div>
           <div class="calt-date3-row" id="calt_date3_panel"></div>
-          <div class="calt-field-row" style="margin-top:6px">
-            <span class="calt-flabel">Глубина инжекции</span>
-            <input type="range" id="calt_depth_slider" min="0" max="15" step="1" style="flex:1;accent-color:#fbbf24;min-width:0">
-            <span id="calt_depth_val" style="font-size:12px;color:#fbbf24;min-width:18px;text-align:right">0</span>
+          <div class="calt-field-label">Глубина инжекции</div>
+          <div class="calt-field-row" style="margin-top:3px">
+            <span class="calt-flabel">📜 Правила</span>
+            <input type="range" id="calt_depth_rules" min="0" max="15" step="1" style="flex:1;accent-color:#a78bfa;min-width:0">
+            <span id="calt_depth_rules_val" style="font-size:12px;color:#a78bfa;min-width:18px;text-align:right">0</span>
+          </div>
+          <div class="calt-field-row" style="margin-top:3px">
+            <span class="calt-flabel">⏳ Дедлайны</span>
+            <input type="range" id="calt_depth_deadlines" min="0" max="15" step="1" style="flex:1;accent-color:#60a5fa;min-width:0">
+            <span id="calt_depth_deadlines_val" style="font-size:12px;color:#60a5fa;min-width:18px;text-align:right">1</span>
+          </div>
+          <div class="calt-field-row" style="margin-top:3px">
+            <span class="calt-flabel">⚔ Таймлайн</span>
+            <input type="range" id="calt_depth_timeline" min="0" max="15" step="1" style="flex:1;accent-color:#fbbf24;min-width:0">
+            <span id="calt_depth_timeline_val" style="font-size:12px;color:#fbbf24;min-width:18px;text-align:right">4</span>
           </div>
           <div style="font-size:10px;color:#3d4a60;margin-top:1px">0 = конец промпта · 5 = за 5 сообщениями</div>
+          <div class="calt-field-row" style="margin-top:6px">
+            <span class="calt-flabel">Горизонт дедлайна (дни)</span>
+            <input type="number" class="calt-depth-inp" id="calt_dl_horizon" min="1" max="365" style="width:52px">
+            <span style="font-size:10px;color:#3d4a60">дн. (в контексте)</span>
+          </div>
           <button class="menu_button calt-open-btn" id="calt_open_btn">📖 Открыть календарь</button>
           <div class="calt-sec" id="calt_conn_wrap">
             <div class="calt-sec-hdr" id="calt_conn_hdr"><span class="calt-sec-chev" id="calt_conn_chev">▸</span><span>🔌 Подключение</span></div>
@@ -773,9 +880,22 @@
     $('#calt_autoscan').on('change', function() { getSettings().autoScan = this.checked; save(); });
     let _dt = {};
     const deb = (k, fn) => { clearTimeout(_dt[k]); _dt[k] = setTimeout(fn, 400); };
-    $('#calt_depth_slider').on('input', function() {
-      const v = +this.value; $('#calt_depth_val').text(v);
-      deb('dep', async () => { getSettings().injectionDepth = v; save(); await updatePrompt(); });
+    $('#calt_depth_rules').on('input', function() {
+      const v = +this.value; $('#calt_depth_rules_val').text(v);
+      deb('dr', async () => { getSettings().depthRules = v; save(); await updatePrompt(); });
+    });
+    $('#calt_depth_deadlines').on('input', function() {
+      const v = +this.value; $('#calt_depth_deadlines_val').text(v);
+      deb('dd', async () => { getSettings().depthDeadlines = v; save(); await updatePrompt(); });
+    });
+    $('#calt_depth_timeline').on('input', function() {
+      const v = +this.value; $('#calt_depth_timeline_val').text(v);
+      deb('dt', async () => { getSettings().depthTimeline = v; save(); await updatePrompt(); });
+    });
+    $('#calt_dl_horizon').on('change', function() {
+      const v = Math.max(1, +this.value || 7);
+      this.value = v;
+      getSettings().deadlineHorizon = v; save(); updatePrompt();
     });
     $('#calt_test_btn').on('click', async () => {
       const $s = $('#calt_test_status'); $s.css('color','#7a8499').text('Тестирую…');
@@ -857,10 +977,13 @@
   }
 
   function refreshSettingsUi() {
-    const s = getSettings(), depth = s.injectionDepth||0, name = getActiveProfileName();
+    const s = getSettings(), name = getActiveProfileName();
     $('#calt_enabled').prop('checked', s.enabled !== false);
     $('#calt_autoscan').prop('checked', !!s.autoScan);
-    $('#calt_depth_slider').val(depth); $('#calt_depth_val').text(depth);
+    $('#calt_depth_rules').val(s.depthRules||0); $('#calt_depth_rules_val').text(s.depthRules||0);
+    $('#calt_depth_deadlines').val(s.depthDeadlines||1); $('#calt_depth_deadlines_val').text(s.depthDeadlines||1);
+    $('#calt_depth_timeline').val(s.depthTimeline||4); $('#calt_depth_timeline_val').text(s.depthTimeline||4);
+    $('#calt_dl_horizon').val(s.deadlineHorizon||7);
     $('#calt_conn_label').text(name || 'Активный профиль ST');
     $('#calt_conn_dot').css('color', name ? '#34d399' : '#fbbf24');
     renderDate3('#calt_date3_panel','calt_p_day','calt_p_month','calt_p_year',
@@ -1138,28 +1261,83 @@
   // ─── Deadlines tab ────────────────────────────────────────────────────────
   function buildDeadlinesTab() {
     const s = getSettings(), cm = currentMonth();
+    const horizon = s.deadlineHorizon || 7;
+
+    // Type filter pills
+    let typeFilterHtml = '';
+    const usedTypes = {};
+    s.deadlines.forEach(e => { usedTypes[e.dtype || 'event'] = true; });
+    if (Object.keys(usedTypes).length > 1) {
+      typeFilterHtml = '<div class="calt-tag-filter-bar">' +
+        DEADLINE_TYPES.filter(t => usedTypes[t.key]).map(t =>
+          '<button class="calt-dl-type-filter" data-dtype="' + t.key + '" style="border-color:' + t.color + ';color:' + t.color + '">' + t.label + '</button>'
+        ).join('') + '</div>';
+    }
+
     let listHtml = '';
     if (!s.deadlines.length) {
       listHtml = '<div class="calt-empty">Дедлайнов нет.</div>';
     } else {
+      // Group by month
+      const groups = {}, order = [];
       s.deadlines.forEach(e => {
-        const approaching = cm && extractMonth(e.date) === cm;
-        const db = e.date
-          ? '<span class="calt-ev-date' + (approaching?' calt-ev-date-urgent':'') + '">' + (approaching?'⚠ ':'') + esc(e.date) + '</span>'
-          : '<span class="calt-ev-date calt-ev-date-empty">—</span>';
-        listHtml += '<div class="calt-ev-row" data-id="' + e.id + '" data-type="deadline">'
-          + '<div class="calt-ev-left">' + db
-          + '<div class="calt-ev-content"><span class="calt-ev-text" data-id="' + e.id + '" data-type="deadline">' + esc(e.text) + '</span></div></div>'
-          + '<div class="calt-ev-acts">'
-          + '<button class="calt-ev-btn calt-ev-edit" data-id="' + e.id + '" data-type="deadline">✎</button>'
-          + '<button class="calt-ev-btn calt-ev-del" data-id="' + e.id + '" data-type="deadline">✕</button>'
-          + '</div></div>';
+        const m = extractMonth(e.date) || '— Без даты';
+        if (!groups[m]) { groups[m] = []; order.push(m); }
+        groups[m].push(e);
+      });
+      order.forEach(month => {
+        listHtml += '<div class="calt-month-group">'
+          + '<div class="calt-month-hdr calt-dl-month-hdr" data-month="' + esc(month) + '">'
+          + '<span class="calt-month-chev">▾</span>'
+          + '<span class="calt-month-name">' + esc(month) + '</span>'
+          + '<span class="calt-month-count">' + groups[month].length + '</span>'
+          + '</div>'
+          + '<div class="calt-month-body">';
+        groups[month].forEach(e => {
+          const hot = isDeadlineHot(e);
+          const dt = dlTypeByKey(e.dtype);
+          const approaching = cm && extractMonth(e.date) === cm;
+          const dateBadge = e.date
+            ? '<span class="calt-ev-date' + (approaching ? ' calt-ev-date-urgent' : '') + '">' + (approaching?'⚠ ':'') + esc(e.date) + '</span>'
+            : '<span class="calt-ev-date calt-ev-date-empty">—</span>';
+          const typeBadge = '<span class="calt-dl-type-badge" style="border-color:' + dt.color + ';color:' + dt.color + '">' + dt.label + '</span>';
+          const hotBadge = hot
+            ? '<span class="calt-dl-hot-badge">● в контексте</span>'
+            : '<span class="calt-dl-cold-badge">○ скрыт</span>';
+          const titleHtml = e.title ? '<span class="calt-dl-title">' + esc(e.title) + '</span>' : '';
+          const pinClass = e.pinned ? ' calt-ev-pin-active' : '';
+          listHtml += '<div class="calt-ev-row' + (hot ? '' : ' calt-dl-row-cold') + '" data-id="' + e.id + '" data-type="deadline">'
+            + '<div class="calt-ev-left">' + dateBadge
+            + '<div class="calt-ev-content">'
+            + (titleHtml ? titleHtml : '')
+            + '<span class="calt-ev-text" data-id="' + e.id + '" data-type="deadline">' + esc(e.text) + '</span>'
+            + '<div class="calt-dl-meta">' + typeBadge + hotBadge + '</div>'
+            + '</div></div>'
+            + '<div class="calt-ev-acts">'
+            + '<button class="calt-ev-btn calt-dl-type-btn" data-id="' + e.id + '" title="Тип">🏷</button>'
+            + '<button class="calt-ev-btn calt-ev-pin' + pinClass + '" data-id="' + e.id + '" data-type="deadline" title="' + (e.pinned?'Открепить':'Закрепить в контексте') + '">📌</button>'
+            + '<button class="calt-ev-btn calt-ev-edit" data-id="' + e.id + '" data-type="deadline">✎</button>'
+            + '<button class="calt-ev-btn calt-ev-del" data-id="' + e.id + '" data-type="deadline">✕</button>'
+            + '</div></div>';
+        });
+        listHtml += '</div></div>';
       });
     }
-    return '<div class="calt-list-wrap"><div class="calt-list">' + listHtml + '</div></div>'
-      + '<div class="calt-add-row">'
-      + '<input class="calt-add-date" id="calt_add_dl_date" placeholder="Дата">'
-      + '<input class="calt-add-txt" id="calt_add_dl_txt" placeholder="Грядущее событие...">'
+
+    // Legend
+    const legendHtml = '<div class="calt-legend">'
+      + '<div class="calt-legend-left"><span class="calt-dl-hot-badge">● в контексте</span> ≤' + horizon + 'дн · <span class="calt-dl-cold-badge">○ скрыт</span> · 📌 фиксация</div>'
+      + '</div>';
+
+    return legendHtml + typeFilterHtml
+      + '<div class="calt-list-wrap"><div class="calt-list">' + listHtml + '</div></div>'
+      + '<div class="calt-add-row" style="flex-wrap:wrap;gap:6px">'
+      + '<div class="calt-date3-row calt-add-date3" id="calt_add_dl_date3"></div>'
+      + '<input class="calt-add-txt" id="calt_add_dl_title" placeholder="Название (опционально)..." style="flex:0 1 160px;min-width:100px">'
+      + '<input class="calt-add-txt" id="calt_add_dl_txt" placeholder="Описание...">'
+      + '<select class="calt-cfg-sel" id="calt_add_dl_type" style="flex-shrink:0;width:auto">'
+      + DEADLINE_TYPES.map(t => '<option value="' + t.key + '">' + t.label + '</option>').join('')
+      + '</select>'
       + '<button class="calt-add-btn" id="calt_add_dl_btn">+ Добавить</button>'
       + '</div>'
       + '<div class="calt-scan-row">'
@@ -1218,7 +1396,7 @@
         '<input class="calt-cfg-inp-lg" id="cfg_erafrom" value="' + esc(cc.eraFrom||'') + '" placeholder="Year of the Purification"></div>';
 
     // Months
-    let monthsRows = '<div class="calt-cfg-row calt-cfg-thead"><span></span><span>Название</span><span>Дней</span><span>Сезон</span><span>Ежегодные события</span><span></span></div>';
+    let monthsRows = '<div class="calt-cfg-row calt-cfg-thead"><span></span><span>Название</span><span>Дней</span><span>Сезон</span><span>Атмосфера месяца</span><span></span></div>';
     cc.months.forEach((m, i) => {
       monthsRows += '<div class="calt-cfg-row calt-month-row" data-idx="' + i + '">'
         + '<div class="calt-reorder-btns">'
@@ -1228,7 +1406,7 @@
         + '<input class="calt-cfg-inp-sm" data-field="name" placeholder="Название" value="' + esc(m.name||'') + '">'
         + '<input class="calt-cfg-inp-xs" type="number" min="1" max="400" data-field="days" placeholder="Дн" value="' + esc(m.days||'') + '">'
         + '<input class="calt-cfg-inp-sm" data-field="season" placeholder="Сезон" value="' + esc(m.season||'') + '">'
-        + '<input class="calt-cfg-inp-lg" data-field="recurringNote" placeholder="Ежегодные события..." value="' + esc(m.recurringNote||'') + '">'
+        + '<input class="calt-cfg-inp-lg" data-field="recurringNote" placeholder="Атмосфера месяца..." value="' + esc(m.recurringNote||'') + '">'
         + '<button class="calt-cfg-del-btn" data-rules-action="del-month" data-idx="' + i + '">✕</button>'
         + '</div>';
     });
@@ -1454,15 +1632,39 @@
     $('#calt_add_ev_txt').off('keydown').on('keydown', e => { if (e.key==='Enter') $('#calt_add_ev_btn').click(); });
 
     // ── Add deadline ──────────────────────────────────────────────────────
+    renderDate3('#calt_add_dl_date3', 'calt_add_dl_day', 'calt_add_dl_month', 'calt_add_dl_year', '', '', '');
     $('#calt_add_dl_btn').off('click').on('click', () => {
-      const date = $('#calt_add_dl_date').val().trim(), text = $('#calt_add_dl_txt').val().trim();
+      const d = $('#calt_add_dl_day').val().trim();
+      const m = $('#calt_add_dl_month').val().trim();
+      const y = $('#calt_add_dl_year').val().trim();
+      const date = buildDateString(d, m, y);
+      const title = ($('#calt_add_dl_title').val() || '').trim();
+      const text = $('#calt_add_dl_txt').val().trim();
+      const dtype = $('#calt_add_dl_type').val() || 'event';
       if (!text) { $('#calt_add_dl_txt').focus(); return; }
-      const s = getSettings(); s.deadlines.push({ id:s.nextDeadlineId++, date, text });
+      const s = getSettings(); s.deadlines.push({ id:s.nextDeadlineId++, date, title, text, pinned:false, dtype });
       save(); updatePrompt(); updateMeta();
-      $('#calt_add_dl_date').val(''); $('#calt_add_dl_txt').val('');
+      $('#calt_add_dl_title').val(''); $('#calt_add_dl_txt').val('');
       renderTabContent();
     });
     $('#calt_add_dl_txt').off('keydown').on('keydown', e => { if (e.key==='Enter') $('#calt_add_dl_btn').click(); });
+
+    // ── Deadline pin ──────────────────────────────────────────────────────
+    if (activeTab === 'deadlines') {
+      $('.calt-ev-pin[data-type="deadline"]').off('click').on('click', function() {
+        const id = +$(this).data('id'), s = getSettings();
+        const item = s.deadlines.find(e => e.id === id); if (!item) return;
+        item.pinned = !item.pinned;
+        save(); updatePrompt(); renderTabContent();
+        toast(item.pinned ? '📌 Закреплено в контексте' : 'Откреплено', item.pinned ? '#fbbf24' : '#94a3b8');
+      });
+
+      // ── Deadline type picker ──────────────────────────────────────────
+      $('.calt-dl-type-btn').off('click').on('click', function(e) {
+        e.stopPropagation();
+        openDeadlineTypePicker(+$(this).data('id'), $(this));
+      });
+    }
 
     // ── Scan depth ────────────────────────────────────────────────────────
     $('#calt_scan_ev_depth,#calt_scan_dl_depth').off('change').on('change', function() {
@@ -1679,6 +1881,26 @@
     setTimeout(() => { $(document).one('click', () => $p.remove()); }, 50);
   }
 
+  // ─── Deadline type picker ─────────────────────────────────────────────────
+  function openDeadlineTypePicker(id, $btn) {
+    $('.calt-tag-picker').remove();
+    const s = getSettings();
+    const item = s.deadlines.find(e => e.id === id); if (!item) return;
+    const html = DEADLINE_TYPES.map(t => {
+      const active = (item.dtype || 'event') === t.key;
+      return '<button class="calt-tag-opt' + (active?' calt-tag-opt-active':'') + '" data-key="' + t.key + '" style="border-color:' + t.color + ';color:' + t.color + '">' + t.label + '</button>';
+    }).join('');
+    const $p = $('<div class="calt-tag-picker">' + html + '</div>');
+    $('body').append($p);
+    const off = $btn.offset();
+    $p.css({ top:(off.top + $btn.outerHeight() + 4) + 'px', left:Math.max(8, off.left - 80) + 'px' });
+    $p.on('click', '.calt-tag-opt', function() {
+      item.dtype = $(this).data('key');
+      save(); updatePrompt(); renderTabContent(); $p.remove();
+    });
+    setTimeout(() => { $(document).one('click', () => $p.remove()); }, 50);
+  }
+
   // ─── Summary edit overlay ─────────────────────────────────────────────────
   function openSummaryEdit(month) {
     const curr = getSettings().monthSummaries[month] || '';
@@ -1709,13 +1931,19 @@
   function openEditModal(id, type) {
     const s = getSettings(), arr = type === 'event' ? s.keyEvents : s.deadlines;
     const item = arr.find(e => e.id === id); if (!item) return;
+    const isDl = type === 'deadline';
+    const titleField = isDl
+      ? '<div class="calt-elabel" style="margin-top:8px">Название (опционально)</div>'
+        + '<input class="calt-einput" id="calt_edit_title" value="' + esc(item.title||'') + '" placeholder="Краткое название">'
+      : '';
     $('.calt-edit-overlay').remove();
     $('body').append(
       '<div class="calt-edit-overlay calt-eopen"><div class="calt-edit-box">'
       + '<div class="calt-edit-hdr"><span>' + (type==='event'?'⚔ Редактировать событие':'⏳ Редактировать дедлайн') + '</span><button class="calt-edit-x" id="calt_edit_x">✕</button></div>'
       + '<div class="calt-edit-body">'
       + '<div class="calt-elabel">Дата</div>'
-      + '<input class="calt-einput" id="calt_edit_date" value="' + esc(item.date||'') + '" placeholder="напр. 23 Naeris 1000">'
+      + '<div class="calt-date3-row" id="calt_edit_date3"></div>'
+      + titleField
       + '<div class="calt-elabel" style="margin-top:8px">Описание</div>'
       + '<textarea class="calt-etextarea" id="calt_edit_text">' + esc(item.text) + '</textarea>'
       + '</div>'
@@ -1724,10 +1952,20 @@
       + '<button class="menu_button calt-save-btn" id="calt_edit_save">💾 Сохранить</button>'
       + '</div></div></div>'
     );
+    // Render date3 inside edit modal
+    const dp = parseDateString(item.date || '');
+    renderDate3('#calt_edit_date3', 'calt_edit_day', 'calt_edit_month', 'calt_edit_year', dp.day, dp.month, dp.year);
+
     $('#calt_edit_x,#calt_edit_cancel').on('click', () => $('.calt-edit-overlay').remove());
     $('#calt_edit_save').on('click', () => {
-      const d = $('#calt_edit_date').val().trim(), t = $('#calt_edit_text').val().trim();
-      if (!t) return; item.date = d; item.text = t;
+      const ed = $('#calt_edit_day').val().trim();
+      const em = $('#calt_edit_month').val().trim();
+      const ey = $('#calt_edit_year').val().trim();
+      const d = buildDateString(ed, em, ey);
+      const t = $('#calt_edit_text').val().trim();
+      if (!t) return;
+      item.date = d; item.text = t;
+      if (isDl) item.title = ($('#calt_edit_title').val() || '').trim();
       save(); updatePrompt(); updateMeta(); renderTabContent();
       $('.calt-edit-overlay').remove(); toast('Сохранено', '#34d399');
     });
@@ -1744,6 +1982,8 @@
       calendarRules:s.calendarRules, calendarConfig:s.calendarConfig,
       monthSummaries:s.monthSummaries, monthSummarySnaps:s.monthSummarySnaps,
       manualHotMonths:s.manualHotMonths, manualColdMonths:s.manualColdMonths,
+      depthRules:s.depthRules, depthDeadlines:s.depthDeadlines, depthTimeline:s.depthTimeline,
+      deadlineHorizon:s.deadlineHorizon,
     }, null, 2)], {type:'application/json'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1777,6 +2017,10 @@
           if (data.monthSummarySnaps)               s.monthSummarySnaps = data.monthSummarySnaps;
           if (Array.isArray(data.manualHotMonths))  s.manualHotMonths = data.manualHotMonths;
           if (Array.isArray(data.manualColdMonths)) s.manualColdMonths = data.manualColdMonths;
+          if (data.depthRules !== undefined)    s.depthRules    = data.depthRules;
+          if (data.depthDeadlines !== undefined) s.depthDeadlines = data.depthDeadlines;
+          if (data.depthTimeline !== undefined)  s.depthTimeline  = data.depthTimeline;
+          if (data.deadlineHorizon !== undefined) s.deadlineHorizon = data.deadlineHorizon;
           // Recalculate safe nextIds (prevents NaN and duplicate IDs)
           s.nextEventId    = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
           s.nextDeadlineId = Math.max(0, ...s.deadlines.map(e => e.id||0)) + 1;
@@ -1877,7 +2121,7 @@
   jQuery(() => {
     try {
       wireEvents();
-      console.log('[Calendar Tracker v4.0] ✦ loaded');
+      console.log('[Calendar Tracker v5.0] ✦ loaded');
     } catch(e) { console.error('[Calendar Tracker] init failed:', e); }
   });
 

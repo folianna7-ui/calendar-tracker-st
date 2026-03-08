@@ -1,5 +1,5 @@
 /* ================================================================
-   Calendar Tracker v4.0 — Style Sheet
+   Calendar Tracker v5.0 — Style Sheet
    ================================================================ */
 
 /* ── Settings panel ─────────────────────────────────────────── */
@@ -73,7 +73,6 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-modal-title { font-size:14px; font-weight:700; color:#fbbf24; flex-shrink:0; }
 .calt-modal-date-wrap { display:flex; align-items:center; gap:7px; flex:1; min-width:0; }
 .calt-modal-date-label { font-size:11px; color:#4a5568; white-space:nowrap; flex-shrink:0; }
-.calt-modal-tokens { font-size:11px; color:#2d3b55; white-space:nowrap; flex-shrink:0; margin:0 4px; }
 .calt-modal-x {
   background:none; border:none; color:#4a5568; font-size:16px; cursor:pointer;
   padding:4px; line-height:1; font-family:inherit; flex-shrink:0; transition:color 0.15s;
@@ -258,7 +257,6 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 }
 /* date3 inside add row: sits inline, no extra margin */
 .calt-add-date3 { flex-shrink:0; display:flex; gap:4px; align-items:center; }
-.calt-add-date3 .calt-date3-row { flex:1; width:100%; }
 .calt-add-date {
   width:110px; flex-shrink:0; background:#0d1117; border:1px solid rgba(255,255,255,0.09);
   border-radius:6px; color:#c9d1e0; padding:8px 10px; font-size:12px; font-family:inherit; outline:none;
@@ -448,27 +446,22 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
   .calt-modal-hdr { flex-wrap:nowrap; gap:6px; padding:8px 10px; align-items:center; }
   .calt-modal-title { display:none; }
   .calt-modal-tokens { display:none; }
-  .calt-modal-date-wrap { flex:1; min-width:0; gap:4px; }
+  .calt-modal-date-wrap { flex:1; min-width:0; gap:4px; overflow:hidden; }
   .calt-modal-date-label { font-size:10px; }
   .calt-modal-x { margin-left:auto; }
-  .calt-date3-day  { width:50px; }
-  .calt-date3-year { width:62px; }
+  .calt-date3-day  { width:38px; padding:5px 4px; font-size:11px; }
+  .calt-date3-year { width:48px; padding:5px 4px; font-size:11px; }
+  .calt-date3-month { font-size:11px; padding:5px 4px; }
+  .calt-modal-hdr .calt-date3-row { gap:3px; }
   .calt-cfg-inp-sm { width:88px; }
   .calt-cfg-inp-xs { width:52px; }
   .calt-moon-card  { margin:6px; }
   .calt-tag-picker { max-width:calc(100vw - 20px); }
-  .calt-add-row    { flex-wrap:wrap; gap:6px; padding:8px 10px; }
-  /* date3 picker takes full width on first line */
-  .calt-add-date3  { width:100%; order:1; display:flex; }
-  .calt-add-date3 .calt-date3-row { flex:1; }
-  .calt-date3-day  { width:52px; }
-  .calt-date3-year { width:64px; }
-  /* month select fills remaining space */
-  .calt-date3-month { flex:1; min-width:0; max-width:none; width:auto; }
-  /* text input and button share second line */
-  .calt-add-txt    { order:2; flex:1; min-width:0; }
-  .calt-add-btn    { order:3; flex-shrink:0; }
+  .calt-add-row    { flex-wrap:wrap; }
   .calt-add-date   { width:90px; }
+  .calt-add-date3 .calt-date3-day  { width:36px; padding:5px 3px; }
+  .calt-add-date3 .calt-date3-year { width:44px; padding:5px 3px; }
+  .calt-add-date3 .calt-date3-month { font-size:11px; padding:5px 3px; }
   .calt-ev-acts    { opacity:1; }
   .calt-modal-x    { min-width:44px; min-height:44px; font-size:20px; display:flex; align-items:center; justify-content:center; }
   .calt-foot-btn   { min-height:44px; }
@@ -507,4 +500,53 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 }
 .calt-foot-clear:hover {
   background:rgba(248,113,113,0.18) !important;
+}
+
+/* ── v5.0: Deadline type badge ─────────────────────────────── */
+.calt-dl-type-badge {
+  font-size:9px; font-weight:700; border:1px solid; border-radius:4px;
+  padding:1px 5px; white-space:nowrap; flex-shrink:0;
+}
+.calt-dl-meta {
+  display:flex; align-items:center; gap:5px; margin-top:2px; flex-wrap:wrap;
+}
+.calt-dl-hot-badge {
+  font-size:9px; font-weight:700; color:#34d399;
+}
+.calt-dl-cold-badge {
+  font-size:9px; font-weight:700; color:#4a5568;
+}
+.calt-dl-row-cold {
+  opacity:0.55;
+}
+.calt-dl-row-cold:hover {
+  opacity:0.85;
+}
+.calt-dl-title {
+  font-size:12px; font-weight:700; color:#fbbf24; line-height:1.3;
+}
+.calt-dl-month-hdr {
+  cursor:default;
+}
+
+/* ── v5.0: Token counter per-section ───────────────────────── */
+.calt-modal-tokens {
+  font-size:10px; white-space:nowrap; flex-shrink:0; margin:0 4px;
+  display:flex; gap:4px; align-items:center;
+}
+.calt-modal-tokens span {
+  font-weight:700;
+}
+
+/* ── v5.0: Deadline type filter ────────────────────────────── */
+.calt-dl-type-filter {
+  background:transparent; border:1px solid; border-radius:5px;
+  font-size:10px; font-weight:600; padding:2px 7px; cursor:pointer;
+  font-family:inherit; transition:all 0.15s; opacity:0.7;
+}
+.calt-dl-type-filter:hover { opacity:1; }
+
+/* ── v5.0: Settings depth rows ─────────────────────────────── */
+.calt-field-row .calt-flabel {
+  min-width:82px;
 }
