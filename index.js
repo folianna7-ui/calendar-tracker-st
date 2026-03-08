@@ -740,7 +740,7 @@
             <span id="calt_depth_val" style="font-size:12px;color:#fbbf24;min-width:18px;text-align:right">0</span>
           </div>
           <div style="font-size:10px;color:#3d4a60;margin-top:1px">0 = конец промпта · 5 = за 5 сообщениями</div>
-          <button class="menu_button calt-open-btn" id="calt_open_btn">📖 Открыть календарь</button>
+          <button class="calt-open-btn" id="calt_open_btn">📖 Открыть календарь</button>
           <div class="calt-sec" id="calt_conn_wrap">
             <div class="calt-sec-hdr" id="calt_conn_hdr"><span class="calt-sec-chev" id="calt_conn_chev">▸</span><span>🔌 Подключение</span></div>
             <div class="calt-sec-body" id="calt_conn_body" style="display:none">
@@ -781,25 +781,11 @@
         $s.css('color','#34d399').text('✅ ' + r.trim().slice(0,50));
       } catch(e) { $s.css('color','#f87171').text('✗ ' + e.message); }
     });
-    // Mobile fix: use both click and touchend to ensure the event fires
-    // even when SillyTavern's menu_button handlers intercept on mobile.
-    // Also add a direct DOM listener as fallback for ST mobile environments
-    // where jQuery delegation might not reach the button.
-    const openBtnEl = document.getElementById('calt_open_btn');
-    let _openTouched = false;
-    if (openBtnEl) {
-      openBtnEl.addEventListener('touchend', function(e) {
-        e.preventDefault();
+    // Native DOM listener — works even when ST intercepts jQuery events on mobile
+    const _openEl = document.getElementById('calt_open_btn');
+    if (_openEl) {
+      _openEl.addEventListener('click', function(e) {
         e.stopPropagation();
-        e.stopImmediatePropagation();
-        _openTouched = true;
-        openModal();
-        // Reset flag after a tick so click can work normally next time
-        setTimeout(() => { _openTouched = false; }, 400);
-      }, { passive: false, capture: true });
-      openBtnEl.addEventListener('click', function(e) {
-        // Skip if already handled by touchend (prevents double-fire)
-        if (_openTouched) { _openTouched = false; return; }
         openModal();
       }, true);
     }
@@ -890,18 +876,17 @@
   // ─── Modal ────────────────────────────────────────────────────────────────
   // Pattern copied from v1.1 (the last known-working version on mobile).
   // Dynamic creation on first click, show/hide via calt-mopen class, z-index 99999.
-  let _savedScrollY = 0;
-
   function _showModal() {
-    // Save scroll position before locking body
-    _savedScrollY = window.scrollY || window.pageYOffset || 0;
-    $('#calt_modal').addClass('calt-mopen');
-    $('body').addClass('calt-body-locked').css('top', -_savedScrollY + 'px');
+    const el = document.getElementById('calt_modal');
+    if (el) el.style.display = 'flex';
   }
   function _hideModal() {
-    $('#calt_modal').removeClass('calt-mopen');
-    $('body').removeClass('calt-body-locked').css('top', '');
-    window.scrollTo(0, _savedScrollY);
+    const el = document.getElementById('calt_modal');
+    if (el) el.style.display = 'none';
+  }
+  function _isModalOpen() {
+    const el = document.getElementById('calt_modal');
+    return el && el.style.display === 'flex';
   }
 
   function openModal() {
@@ -912,7 +897,7 @@
     }
 
     $('body').append(`
-      <div class="calt-modal" id="calt_modal">
+      <div class="calt-modal" id="calt_modal" style="display:none">
         <div class="calt-modal-inner">
           <div class="calt-drag-handle"></div>
           <div class="calt-modal-hdr">
@@ -932,10 +917,10 @@
           </div>
           <div class="calt-tab-body" id="calt_tab_body"></div>
           <div class="calt-modal-footer">
-            <button class="menu_button calt-foot-btn" id="calt_export_btn">💾 Экспорт</button>
-            <button class="menu_button calt-foot-btn" id="calt_import_btn">📥 Импорт</button>
-            <button class="menu_button calt-foot-btn calt-foot-clear" id="calt_clear_btn">🗑 Очистить</button>
-            <button class="menu_button calt-foot-btn calt-foot-close" id="calt_modal_close2">Закрыть</button>
+            <button class="calt-foot-btn" id="calt_export_btn">💾 Экспорт</button>
+            <button class="calt-foot-btn" id="calt_import_btn">📥 Импорт</button>
+            <button class="calt-foot-btn calt-foot-clear" id="calt_clear_btn">🗑 Очистить</button>
+            <button class="calt-foot-btn calt-foot-close" id="calt_modal_close2">Закрыть</button>
           </div>
         </div>
       </div>`);
@@ -943,20 +928,17 @@
     syncModalDate();
     _showModal();
 
-    $('#calt_modal_close, #calt_modal_close2').on('click touchend', function(e) {
-      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
-      _hideModal();
+    // Close buttons — native DOM listeners (capture phase)
+    ['calt_modal_close','calt_modal_close2'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) el.addEventListener('click', function(e) { e.stopPropagation(); _hideModal(); }, true);
     });
-    // Backdrop click/touch to close (desktop only — on mobile the modal is full-width)
-    $('#calt_modal').on('click touchend', function(e) {
-      if (!$(e.target).is('#calt_modal')) return;
-      if (window.innerWidth > 600) {
-        if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
-        _hideModal();
-      }
-    });
-    $('#calt_tabs').on('click touchend', '.calt-tab', function(e) {
-      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
+    // Backdrop click (desktop only)
+    document.getElementById('calt_modal').addEventListener('click', function(e) {
+      if (e.target.id === 'calt_modal' && window.innerWidth > 600) _hideModal();
+    }, false);
+    // Tabs
+    $('#calt_tabs').on('click', '.calt-tab', function() {
       const newTab = $(this).data('tab');
       if (_cfgDirty && activeTab === 'rules' && newTab !== 'rules') {
         if (!confirm('Есть несохранённые изменения в Правилах. Покинуть вкладку?')) return;
@@ -968,18 +950,13 @@
       if (newTab !== 'rules') { _cfgDirty = false; updateDirtyBadge(); }
       renderTabContent();
     });
-    $('#calt_export_btn').on('click touchend', function(e) {
-      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
-      exportData();
-    });
-    $('#calt_import_btn').on('click touchend', function(e) {
-      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
-      importData();
-    });
-    $('#calt_clear_btn').on('click touchend', function(e) {
-      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
-      clearChatData();
-    });
+    // Footer buttons — native DOM listeners
+    var _expEl = document.getElementById('calt_export_btn');
+    var _impEl = document.getElementById('calt_import_btn');
+    var _clrEl = document.getElementById('calt_clear_btn');
+    if (_expEl) _expEl.addEventListener('click', function(e) { e.stopPropagation(); exportData(); }, true);
+    if (_impEl) _impEl.addEventListener('click', function(e) { e.stopPropagation(); importData(); }, true);
+    if (_clrEl) _clrEl.addEventListener('click', function(e) { e.stopPropagation(); clearChatData(); }, true);
     renderTabContent();
   }
 
@@ -1837,14 +1814,14 @@
         }
         if (changed) {
           save(); updatePrompt(); updateMeta();
-          if ($('#calt_modal').hasClass('calt-mopen')) renderTabContent();
+          if (_isModalOpen()) renderTabContent();
           toast('Таймлайн обновлён автоматически', '#34d399', () => {
             s.keyEvents  = JSON.parse(evSnap);
             s.deadlines  = JSON.parse(dlSnap);
             s.nextEventId    = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
             s.nextDeadlineId = Math.max(0, ...s.deadlines.map(e => e.id||0)) + 1;
             save(); updatePrompt(); updateMeta();
-            if ($('#calt_modal').hasClass('calt-mopen')) renderTabContent();
+            if (_isModalOpen()) renderTabContent();
           });
         }
       } catch(e) { console.warn('[CalTracker] autoscan error:', e.message); }
@@ -1863,7 +1840,7 @@
       _lastAutoLen = 0; _collapsedMonths = {}; _searchQuery = ''; _tagFilter = null;
       _cfgDraft = null; _cfgDirty = false; clearDraftFromSession();
       refreshSettingsUi(); await updatePrompt();
-      if ($('#calt_modal').hasClass('calt-mopen')) {
+      if (_isModalOpen()) {
         syncModalDate(); // rebuild dropdown for new chat's calendarConfig
         renderTabContent();
       }
@@ -1881,8 +1858,9 @@
     $(document).on('keydown.calt', e => {
       if (e.altKey && e.key.toLowerCase() === 't') {
         e.preventDefault();
-        if ($('#calt_modal').hasClass('calt-mopen')) _hideModal();
+        if (_isModalOpen()) _hideModal();
         else openModal();
+      }
       }
     });
   }
