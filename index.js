@@ -781,14 +781,12 @@
         $s.css('color','#34d399').text('✅ ' + r.trim().slice(0,50));
       } catch(e) { $s.css('color','#f87171').text('✗ ' + e.message); }
     });
-    // Native DOM listener — works even when ST intercepts jQuery events on mobile
-    const _openEl = document.getElementById('calt_open_btn');
-    if (_openEl) {
-      _openEl.addEventListener('click', function(e) {
-        e.stopPropagation();
-        openModal();
-      }, true);
-    }
+    // Fetish Manager pattern: document-level delegation with touchend for mobile ST
+    $(document).on('click touchend', '#calt_open_btn', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      openModal();
+    });
     bindPanelDate3();
   }
 
@@ -928,17 +926,22 @@
     syncModalDate();
     _showModal();
 
-    // Close buttons — native DOM listeners (capture phase)
-    ['calt_modal_close','calt_modal_close2'].forEach(function(id) {
-      var el = document.getElementById(id);
-      if (el) el.addEventListener('click', function(e) { e.stopPropagation(); _hideModal(); }, true);
+    // Close buttons — FM pattern
+    $(document).on('click touchend', '#calt_modal_close, #calt_modal_close2', function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      _hideModal();
     });
     // Backdrop click (desktop only)
-    document.getElementById('calt_modal').addEventListener('click', function(e) {
-      if (e.target.id === 'calt_modal' && window.innerWidth > 600) _hideModal();
-    }, false);
-    // Tabs
-    $('#calt_tabs').on('click', '.calt-tab', function() {
+    $(document).on('click touchend', '#calt_modal', function(e) {
+      if ($(e.target).is('#calt_modal') && window.innerWidth > 600) {
+        e.preventDefault();
+        _hideModal();
+      }
+    });
+    // Tabs — FM pattern
+    $(document).on('click touchend', '#calt_tabs .calt-tab', function(e) {
+      e.preventDefault();
       const newTab = $(this).data('tab');
       if (_cfgDirty && activeTab === 'rules' && newTab !== 'rules') {
         if (!confirm('Есть несохранённые изменения в Правилах. Покинуть вкладку?')) return;
@@ -950,13 +953,10 @@
       if (newTab !== 'rules') { _cfgDirty = false; updateDirtyBadge(); }
       renderTabContent();
     });
-    // Footer buttons — native DOM listeners
-    var _expEl = document.getElementById('calt_export_btn');
-    var _impEl = document.getElementById('calt_import_btn');
-    var _clrEl = document.getElementById('calt_clear_btn');
-    if (_expEl) _expEl.addEventListener('click', function(e) { e.stopPropagation(); exportData(); }, true);
-    if (_impEl) _impEl.addEventListener('click', function(e) { e.stopPropagation(); importData(); }, true);
-    if (_clrEl) _clrEl.addEventListener('click', function(e) { e.stopPropagation(); clearChatData(); }, true);
+    // Footer buttons — FM pattern
+    $(document).on('click touchend', '#calt_export_btn', function(e) { e.preventDefault(); e.stopPropagation(); exportData(); });
+    $(document).on('click touchend', '#calt_import_btn', function(e) { e.preventDefault(); e.stopPropagation(); importData(); });
+    $(document).on('click touchend', '#calt_clear_btn', function(e) { e.preventDefault(); e.stopPropagation(); clearChatData(); });
     renderTabContent();
   }
 
