@@ -740,7 +740,7 @@
             <span id="calt_depth_val" style="font-size:12px;color:#fbbf24;min-width:18px;text-align:right">0</span>
           </div>
           <div style="font-size:10px;color:#3d4a60;margin-top:1px">0 = конец промпта · 5 = за 5 сообщениями</div>
-          <button class="calt-open-btn" id="calt_open_btn">📖 Открыть календарь</button>
+          <button onclick="window._caltOpen()" style="width:100%;margin-top:8px;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.3);border-radius:6px;color:#fbbf24;font-size:13px;font-weight:700;padding:10px 14px;cursor:pointer;font-family:inherit;text-align:center;min-height:44px;" id="calt_open_btn">📖 Открыть календарь</button>
           <div class="calt-sec" id="calt_conn_wrap">
             <div class="calt-sec-hdr" id="calt_conn_hdr"><span class="calt-sec-chev" id="calt_conn_chev">▸</span><span>🔌 Подключение</span></div>
             <div class="calt-sec-body" id="calt_conn_body" style="display:none">
@@ -781,12 +781,6 @@
         $s.css('color','#34d399').text('✅ ' + r.trim().slice(0,50));
       } catch(e) { $s.css('color','#f87171').text('✗ ' + e.message); }
     });
-    // Native addEventListener — completely bypasses jQuery event system and any
-    // ST wrappers that call stopPropagation/preventDefault in jQuery handlers.
-    const _openBtn = document.getElementById('calt_open_btn');
-    if (_openBtn) {
-      _openBtn.addEventListener('click', function() { openModal(); }, true);
-    }
     bindPanelDate3();
   }
 
@@ -1313,7 +1307,7 @@
       + secWrap('notes','📝','Заметки','', notesHtml)
       + '<div class="calt-rules-actions">'
       + '<button class="menu_button calt-scan-btn" id="calt_rules_extract_btn">✦ Извлечь из лорбука</button>'
-      + '<button class="menu_button calt-rules-save-btn" id="calt_rules_save_btn">💾 Сохранить</button>'
+      + '<button onclick="window._caltSaveRules()" class="menu_button calt-rules-save-btn" id="calt_rules_save_btn">💾 Сохранить</button>'
       + '</div>'
       + '<div class="calt-scan-status" id="calt_scan_rules_status"></div>'
       + '</div>';
@@ -1583,29 +1577,6 @@
         () => { syncDraftFromDOM(); }
       );
 
-    // Save rules — native addEventListener in capture phase bypasses jQuery entirely.
-    const _saveBtn = document.getElementById('calt_rules_save_btn');
-    if (_saveBtn) {
-      // Remove old clone trick not needed — just replace node to wipe any prior listeners
-      const _saveBtnClone = _saveBtn.cloneNode(true);
-      _saveBtn.parentNode.replaceChild(_saveBtnClone, _saveBtn);
-      _saveBtnClone.addEventListener('click', async function() {
-        syncDraftFromDOM();
-        const s = getSettings();
-        s.calendarConfig = JSON.parse(JSON.stringify(_cfgDraft));
-        s.calendarRules  = $('#calt_rules_edit').val();
-        _cfgDirty = false; updateDirtyBadge();
-        clearDraftFromSession();
-        save(); await updatePrompt();
-        syncModalDate();
-        renderDate3('#calt_date3_panel','calt_p_day','calt_p_month','calt_p_year',
-          s.currentDay, s.currentMonthName, s.currentYear);
-        bindPanelDate3();
-        toast('Правила сохранены', '#a78bfa');
-        $('#calt_scan_rules_status').css('color','#34d399').text('✅ Сохранено');
-      }, true); // useCapture: true — fires before any jQuery handler
-    }
-
     // Extract calendar rules from lorebook
     $('#calt_rules_extract_btn').off('click').on('click', async function() {
       const $btn = $(this), $st = $('#calt_scan_rules_status');
@@ -1868,6 +1839,25 @@
       }
     });
   }
+
+  // ─── Global handle so inline onclick= on buttons can reach openModal ─────
+  window._caltOpen = function() { openModal(); };
+  window._caltSaveRules = async function() {
+    if (activeTab !== 'rules') return;
+    syncDraftFromDOM();
+    const s = getSettings();
+    s.calendarConfig = JSON.parse(JSON.stringify(_cfgDraft));
+    s.calendarRules  = $('#calt_rules_edit').val();
+    _cfgDirty = false; updateDirtyBadge();
+    clearDraftFromSession();
+    save(); await updatePrompt();
+    syncModalDate();
+    renderDate3('#calt_date3_panel','calt_p_day','calt_p_month','calt_p_year',
+      s.currentDay, s.currentMonthName, s.currentYear);
+    bindPanelDate3();
+    toast('Правила сохранены', '#a78bfa');
+    $('#calt_scan_rules_status').css('color','#34d399').text('✅ Сохранено');
+  };
 
   // ─── Boot ─────────────────────────────────────────────────────────────────
   jQuery(() => {
