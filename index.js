@@ -781,7 +781,28 @@
         $s.css('color','#34d399').text('✅ ' + r.trim().slice(0,50));
       } catch(e) { $s.css('color','#f87171').text('✗ ' + e.message); }
     });
-    $('#calt_open_btn').on('click', openModal);
+    // Mobile fix: use both click and touchend to ensure the event fires
+    // even when SillyTavern's menu_button handlers intercept on mobile.
+    // Also add a direct DOM listener as fallback for ST mobile environments
+    // where jQuery delegation might not reach the button.
+    const openBtnEl = document.getElementById('calt_open_btn');
+    let _openTouched = false;
+    if (openBtnEl) {
+      openBtnEl.addEventListener('touchend', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        _openTouched = true;
+        openModal();
+        // Reset flag after a tick so click can work normally next time
+        setTimeout(() => { _openTouched = false; }, 400);
+      }, { passive: false, capture: true });
+      openBtnEl.addEventListener('click', function(e) {
+        // Skip if already handled by touchend (prevents double-fire)
+        if (_openTouched) { _openTouched = false; return; }
+        openModal();
+      }, true);
+    }
     bindPanelDate3();
   }
 
@@ -869,11 +890,18 @@
   // ─── Modal ────────────────────────────────────────────────────────────────
   // Pattern copied from v1.1 (the last known-working version on mobile).
   // Dynamic creation on first click, show/hide via calt-mopen class, z-index 99999.
+  let _savedScrollY = 0;
+
   function _showModal() {
+    // Save scroll position before locking body
+    _savedScrollY = window.scrollY || window.pageYOffset || 0;
     $('#calt_modal').addClass('calt-mopen');
+    $('body').addClass('calt-body-locked').css('top', -_savedScrollY + 'px');
   }
   function _hideModal() {
     $('#calt_modal').removeClass('calt-mopen');
+    $('body').removeClass('calt-body-locked').css('top', '');
+    window.scrollTo(0, _savedScrollY);
   }
 
   function openModal() {
@@ -915,11 +943,20 @@
     syncModalDate();
     _showModal();
 
-    $('#calt_modal_close, #calt_modal_close2').on('click', () => _hideModal());
-    $('#calt_modal').on('click', function(e) {
-      if ($(e.target).is('#calt_modal') && window.innerWidth > 600) _hideModal();
+    $('#calt_modal_close, #calt_modal_close2').on('click touchend', function(e) {
+      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
+      _hideModal();
     });
-    $('#calt_tabs').on('click', '.calt-tab', function() {
+    // Backdrop click/touch to close (desktop only — on mobile the modal is full-width)
+    $('#calt_modal').on('click touchend', function(e) {
+      if (!$(e.target).is('#calt_modal')) return;
+      if (window.innerWidth > 600) {
+        if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
+        _hideModal();
+      }
+    });
+    $('#calt_tabs').on('click touchend', '.calt-tab', function(e) {
+      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
       const newTab = $(this).data('tab');
       if (_cfgDirty && activeTab === 'rules' && newTab !== 'rules') {
         if (!confirm('Есть несохранённые изменения в Правилах. Покинуть вкладку?')) return;
@@ -931,9 +968,18 @@
       if (newTab !== 'rules') { _cfgDirty = false; updateDirtyBadge(); }
       renderTabContent();
     });
-    $('#calt_export_btn').on('click', exportData);
-    $('#calt_import_btn').on('click', importData);
-    $('#calt_clear_btn').on('click', clearChatData);
+    $('#calt_export_btn').on('click touchend', function(e) {
+      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
+      exportData();
+    });
+    $('#calt_import_btn').on('click touchend', function(e) {
+      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
+      importData();
+    });
+    $('#calt_clear_btn').on('click touchend', function(e) {
+      if (e.type === 'touchend') { e.preventDefault(); e.stopPropagation(); }
+      clearChatData();
+    });
     renderTabContent();
   }
 

@@ -15,7 +15,7 @@
 .calt-field-label { font-size:11px; color:#4a5568; margin-top:5px; }
 .calt-field-row { display:flex; align-items:center; gap:7px; }
 .calt-flabel { font-size:11px; color:#4a5568; white-space:nowrap; }
-.calt-open-btn { width:100%; margin-top:8px !important; touch-action:manipulation; -webkit-tap-highlight-color:rgba(251,191,36,0.2); }
+.calt-open-btn { width:100%; margin-top:8px !important; touch-action:manipulation; -webkit-tap-highlight-color:rgba(251,191,36,0.2); min-height:44px; cursor:pointer; position:relative; z-index:1; }
 .calt-sec { margin-top:8px; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px; }
 .calt-sec-hdr { display:flex; align-items:center; gap:6px; cursor:pointer; font-size:11px; color:#4a5568; padding:3px 0; user-select:none; }
 .calt-sec-body { padding:6px 0 2px; }
@@ -40,14 +40,18 @@ input[type=number].calt-date3-day::-webkit-inner-spin-button,
 input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 
 /* ── Modal ──────────────────────────────────────────────────── */
+/* Body scroll lock when modal is open (critical for mobile) */
+body.calt-body-locked { overflow:hidden !important; position:fixed !important; width:100% !important; height:100% !important; }
+
 .calt-modal {
   display:none; position:fixed; top:0; right:0; bottom:0; left:0;
   z-index:99999;
   background:rgba(0,0,0,0.5);
   -webkit-overflow-scrolling:touch;
+  pointer-events:auto;
 }
 .calt-modal.calt-mopen {
-  display:flex;
+  display:flex !important;
   align-items:flex-start; justify-content:center; padding-top:48px;
 }
 .calt-modal-inner {
@@ -56,6 +60,9 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
   display:flex; flex-direction:column; overflow:hidden;
   box-shadow:0 24px 60px rgba(0,0,0,0.7);
   animation:calt-drop 0.2s ease;
+  pointer-events:auto;
+  /* Prevent iOS rubber-band scrolling from escaping the modal */
+  overscroll-behavior:contain;
 }
 @keyframes calt-drop { from{opacity:0;transform:translateY(-12px)} to{opacity:1;transform:translateY(0)} }
 .calt-drag-handle { height:4px; background:rgba(255,255,255,0.06); border-radius:2px; width:40px; margin:8px auto 0; flex-shrink:0; }
@@ -88,7 +95,7 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 
 /* ── Tab body ───────────────────────────────────────────────── */
 .calt-tab-body  { flex:1; display:flex; flex-direction:column; overflow:hidden; min-height:0; }
-.calt-list-wrap { flex:1; overflow-y:auto; min-height:0; -webkit-overflow-scrolling:touch; }
+.calt-list-wrap { flex:1; overflow-y:auto; min-height:0; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
 .calt-list      { padding:0; }
 
 /* ── Calendar info bar ──────────────────────────────────────── */
@@ -283,7 +290,7 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-empty { padding:32px 20px; text-align:center; color:#3d4a60; font-size:13px; line-height:1.6; }
 
 /* ── Rules tab ──────────────────────────────────────────────── */
-.calt-rules-wrap { overflow-y:auto; flex:1; padding:8px 12px 12px; -webkit-overflow-scrolling:touch; }
+.calt-rules-wrap { overflow-y:auto; flex:1; padding:8px 12px 12px; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; }
 .calt-cfg-section { border:1px solid rgba(255,255,255,0.05); border-radius:8px; margin:6px 0; overflow:hidden; }
 .calt-cfg-hdr {
   display:flex; align-items:center; gap:7px; padding:8px 12px;
@@ -407,8 +414,16 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 
 /* ── Mobile ─────────────────────────────────────────────────── */
 @media (max-width:600px) {
-  .calt-modal.calt-mopen { padding-top:0; align-items:flex-end; }
-  .calt-modal-inner { border-radius:14px 14px 0 0; max-height:92vh; width:100vw; }
+  .calt-modal.calt-mopen {
+    padding-top:0; align-items:flex-end;
+    /* Ensure modal sits above everything on mobile ST, including drawers */
+    z-index:2147483640 !important;
+  }
+  .calt-modal-inner {
+    border-radius:14px 14px 0 0; max-height:92vh; width:100vw;
+    /* Reset any inherited transforms that could break position:fixed */
+    transform:none;
+  }
   .calt-modal-hdr { flex-wrap:wrap; gap:6px; }
   .calt-modal-date-wrap { width:100%; }
   .calt-date3-day  { width:50px; }
@@ -420,6 +435,17 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
   .calt-add-row    { flex-wrap:wrap; }
   .calt-add-date   { width:90px; }
   .calt-ev-acts    { opacity:1; }
+  /* Make all interactive elements inside modal reliable on touch */
+  .calt-modal button, .calt-modal input, .calt-modal select, .calt-modal textarea,
+  .calt-modal .calt-tab, .calt-modal .calt-ev-btn, .calt-modal .calt-month-hdr {
+    touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent;
+  }
+  /* Ensure close button is large enough for touch on mobile */
+  .calt-modal-x { min-width:40px; min-height:40px; font-size:20px; display:flex; align-items:center; justify-content:center; }
+  .calt-foot-btn { min-height:40px; }
+  /* Mobile overlay (edit/summary) also needs high z-index */
+  .calt-edit-overlay.calt-eopen { z-index:2147483646 !important; }
 }
 
 /* sec-add-row — add buttons now live inside sec-body */
