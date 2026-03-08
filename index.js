@@ -781,7 +781,7 @@
         $s.css('color','#34d399').text('✅ ' + r.trim().slice(0,50));
       } catch(e) { $s.css('color','#f87171').text('✗ ' + e.message); }
     });
-    $('#calt_open_btn').on('click touchend', function(e) { e.preventDefault(); e.stopPropagation(); openModal(); });
+    $('#calt_open_btn').on('click', openModal);
     bindPanelDate3();
   }
 
@@ -867,23 +867,76 @@
   }
 
   // ─── Modal ────────────────────────────────────────────────────────────────
+  // Pattern copied from v1.1 (the last known-working version on mobile).
+  // Dynamic creation on first click, show/hide via calt-mopen class, z-index 99999.
   function _showModal() {
-    const el = document.getElementById('calt_modal');
-    if (!el) { console.error('[CalTracker] modal element not found'); return; }
-    el.classList.remove('calt-mhidden');
-    el.style.display = 'flex';
-    console.log('[CalTracker] modal shown');
-    try { syncModalDate(); } catch(e) { console.warn('[CalTracker] syncModalDate err:', e); }
-    try { renderTabContent(); } catch(e) { console.warn('[CalTracker] renderTabContent err:', e); }
+    $('#calt_modal').addClass('calt-mopen');
   }
   function _hideModal() {
-    const el = document.getElementById('calt_modal');
-    if (!el) return;
-    el.classList.add('calt-mhidden');
-    el.style.display = 'none';
+    $('#calt_modal').removeClass('calt-mopen');
   }
 
-  function openModal() { _showModal(); }
+  function openModal() {
+    if ($('#calt_modal').length) {
+      _showModal();
+      syncModalDate(); renderTabContent();
+      return;
+    }
+
+    $('body').append(`
+      <div class="calt-modal" id="calt_modal">
+        <div class="calt-modal-inner">
+          <div class="calt-drag-handle"></div>
+          <div class="calt-modal-hdr">
+            <span class="calt-modal-icon">🗓</span>
+            <span class="calt-modal-title">Calendar Tracker</span>
+            <div class="calt-modal-date-wrap">
+              <span class="calt-modal-date-label">Текущая дата:</span>
+              <div class="calt-date3-row" id="calt_date3_modal"></div>
+            </div>
+            <span class="calt-modal-tokens" id="calt_modal_tokens"></span>
+            <button class="calt-modal-x" id="calt_modal_close">✕</button>
+          </div>
+          <div class="calt-tabs" id="calt_tabs">
+            <button class="calt-tab active" data-tab="events">⚔ Key Events</button>
+            <button class="calt-tab" data-tab="deadlines">⏳ Deadlines</button>
+            <button class="calt-tab" data-tab="rules">📜 Правила</button>
+          </div>
+          <div class="calt-tab-body" id="calt_tab_body"></div>
+          <div class="calt-modal-footer">
+            <button class="menu_button calt-foot-btn" id="calt_export_btn">💾 Экспорт</button>
+            <button class="menu_button calt-foot-btn" id="calt_import_btn">📥 Импорт</button>
+            <button class="menu_button calt-foot-btn calt-foot-clear" id="calt_clear_btn">🗑 Очистить</button>
+            <button class="menu_button calt-foot-btn calt-foot-close" id="calt_modal_close2">Закрыть</button>
+          </div>
+        </div>
+      </div>`);
+
+    syncModalDate();
+    _showModal();
+
+    $('#calt_modal_close, #calt_modal_close2').on('click', () => _hideModal());
+    $('#calt_modal').on('click', function(e) {
+      if ($(e.target).is('#calt_modal') && window.innerWidth > 600) _hideModal();
+    });
+    $('#calt_tabs').on('click', '.calt-tab', function() {
+      const newTab = $(this).data('tab');
+      if (_cfgDirty && activeTab === 'rules' && newTab !== 'rules') {
+        if (!confirm('Есть несохранённые изменения в Правилах. Покинуть вкладку?')) return;
+        _cfgDraft = null; _cfgDirty = false; clearDraftFromSession();
+      }
+      $('#calt_tabs .calt-tab').removeClass('active');
+      $(this).addClass('active');
+      activeTab = newTab; _tagFilter = null;
+      if (newTab !== 'rules') { _cfgDirty = false; updateDirtyBadge(); }
+      renderTabContent();
+    });
+    $('#calt_export_btn').on('click', exportData);
+    $('#calt_import_btn').on('click', importData);
+    $('#calt_clear_btn').on('click', clearChatData);
+    renderTabContent();
+  }
+
 
   function clearChatData() {
     if (!confirm('Очистить все события, дедлайны, саммери и текущую дату?\n\nСтруктура календаря (месяца, луны) останется нетронутой.')) return;
@@ -1738,14 +1791,14 @@
         }
         if (changed) {
           save(); updatePrompt(); updateMeta();
-          if (!$('#calt_modal').hasClass('calt-mhidden')) renderTabContent();
+          if ($('#calt_modal').hasClass('calt-mopen')) renderTabContent();
           toast('Таймлайн обновлён автоматически', '#34d399', () => {
             s.keyEvents  = JSON.parse(evSnap);
             s.deadlines  = JSON.parse(dlSnap);
             s.nextEventId    = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
             s.nextDeadlineId = Math.max(0, ...s.deadlines.map(e => e.id||0)) + 1;
             save(); updatePrompt(); updateMeta();
-            if (!$('#calt_modal').hasClass('calt-mhidden')) renderTabContent();
+            if ($('#calt_modal').hasClass('calt-mopen')) renderTabContent();
           });
         }
       } catch(e) { console.warn('[CalTracker] autoscan error:', e.message); }
@@ -1764,7 +1817,7 @@
       _lastAutoLen = 0; _collapsedMonths = {}; _searchQuery = ''; _tagFilter = null;
       _cfgDraft = null; _cfgDirty = false; clearDraftFromSession();
       refreshSettingsUi(); await updatePrompt();
-      if (!$('#calt_modal').hasClass('calt-mhidden')) {
+      if ($('#calt_modal').hasClass('calt-mopen')) {
         syncModalDate(); // rebuild dropdown for new chat's calendarConfig
         renderTabContent();
       }
@@ -1782,7 +1835,7 @@
     $(document).on('keydown.calt', e => {
       if (e.altKey && e.key.toLowerCase() === 't') {
         e.preventDefault();
-        if (!$('#calt_modal').hasClass('calt-mhidden')) _hideModal();
+        if ($('#calt_modal').hasClass('calt-mopen')) _hideModal();
         else openModal();
       }
     });
@@ -1791,81 +1844,8 @@
   // ─── Boot ─────────────────────────────────────────────────────────────────
   jQuery(() => {
     try {
-      // 1. Pre-render modal into body (like FM pattern — no dynamic HTML on click)
-      $(document.body).append(`
-        <div class="calt-modal calt-mhidden" id="calt_modal">
-          <div class="calt-modal-inner">
-            <div class="calt-drag-handle"></div>
-            <div class="calt-modal-hdr">
-              <span class="calt-modal-icon">\uD83D\uDDD3</span>
-              <span class="calt-modal-title">Calendar Tracker</span>
-              <div class="calt-modal-date-wrap">
-                <span class="calt-modal-date-label">\u0422\u0435\u043a\u0443\u0449\u0430\u044f \u0434\u0430\u0442\u0430:</span>
-                <div class="calt-date3-row" id="calt_date3_modal"></div>
-              </div>
-              <span class="calt-modal-tokens" id="calt_modal_tokens"></span>
-              <button class="calt-modal-x" id="calt_modal_close">\u2715</button>
-            </div>
-            <div class="calt-tabs" id="calt_tabs">
-              <button class="calt-tab active" data-tab="events">\u2694 Key Events</button>
-              <button class="calt-tab" data-tab="deadlines">\u23F3 Deadlines</button>
-              <button class="calt-tab" data-tab="rules">\uD83D\uDCDC \u041F\u0440\u0430\u0432\u0438\u043B\u0430</button>
-            </div>
-            <div class="calt-tab-body" id="calt_tab_body"></div>
-            <div class="calt-modal-footer">
-              <button class="menu_button calt-foot-btn" id="calt_export_btn">\uD83D\uDCBE \u042D\u043A\u0441\u043F\u043E\u0440\u0442</button>
-              <button class="menu_button calt-foot-btn" id="calt_import_btn">\uD83D\uDCE5 \u0418\u043C\u043F\u043E\u0440\u0442</button>
-              <button class="menu_button calt-foot-btn calt-foot-clear" id="calt_clear_btn">\uD83D\uDDD1 \u041E\u0447\u0438\u0441\u0442\u0438\u0442\u044C</button>
-              <button class="menu_button calt-foot-btn calt-foot-close" id="calt_modal_close2">\u0417\u0430\u043A\u0440\u044B\u0442\u044C</button>
-            </div>
-          </div>
-        </div>`);
-
-      // 2. Floating button — native addEventListener, touchstart with capture
-      // (jQuery touchend was unreliable on Android ST WebView)
-      $(document.body).append('<button id="calt_fab" title="Calendar Tracker">\uD83D\uDDD3</button>');
-      const fabEl = document.getElementById('calt_fab');
-      fabEl.addEventListener('touchstart', function(e) {
-        console.log('[CalTracker] FAB touchstart');
-        e.preventDefault();
-        e.stopPropagation();
-        openModal();
-      }, { passive: false, capture: true });
-      fabEl.addEventListener('click', function(e) {
-        console.log('[CalTracker] FAB click');
-        e.preventDefault();
-        e.stopPropagation();
-        openModal();
-      }, { capture: true });
-
-      // 3. Wire modal events ONCE here (not inside openModal)
-      $('#calt_modal_close, #calt_modal_close2').on('click touchend', function(e) {
-        e.preventDefault(); _hideModal();
-      });
-      $('#calt_modal').on('click', function(e) {
-        if ($(e.target).is('#calt_modal') && window.innerWidth > 600) _hideModal();
-      });
-      $('#calt_tabs').on('click touchend', '.calt-tab', function(e) {
-        e.preventDefault();
-        const newTab = $(this).data('tab');
-        if (_cfgDirty && activeTab === 'rules' && newTab !== 'rules') {
-          if (!confirm('\u0415\u0441\u0442\u044C \u043D\u0435\u0441\u043E\u0445\u0440\u0430\u043D\u0451\u043D\u043D\u044B\u0435 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F \u0432 \u041F\u0440\u0430\u0432\u0438\u043B\u0430\u0445. \u041F\u043E\u043A\u0438\u043D\u0443\u0442\u044C \u0432\u043A\u043B\u0430\u0434\u043A\u0443?')) return;
-          _cfgDraft = null; _cfgDirty = false; clearDraftFromSession();
-        }
-        $('#calt_tabs .calt-tab').removeClass('active');
-        $(this).addClass('active');
-        activeTab = newTab; _tagFilter = null;
-        if (newTab !== 'rules') { _cfgDirty = false; updateDirtyBadge(); }
-        renderTabContent();
-      });
-      $('#calt_export_btn').on('click touchend', function(e) { e.preventDefault(); exportData(); });
-      $('#calt_import_btn').on('click touchend', function(e) { e.preventDefault(); importData(); });
-      $('#calt_clear_btn').on('click touchend', function(e) { e.preventDefault(); clearChatData(); });
-
-      // 4. Wire ST events and settings panel
       wireEvents();
-
-      console.log('[Calendar Tracker v4.0] \u2756 loaded');
+      console.log('[Calendar Tracker v4.0] ✦ loaded');
     } catch(e) { console.error('[Calendar Tracker] init failed:', e); }
   });
 
