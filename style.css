@@ -16,12 +16,12 @@
 .calt-field-row { display:flex; align-items:center; gap:7px; }
 .calt-flabel { font-size:11px; color:#4a5568; white-space:nowrap; }
 .calt-open-btn {
-  width:100%; margin-top:8px; touch-action:manipulation;
-  -webkit-tap-highlight-color:rgba(251,191,36,0.2);
+  width:100%; margin-top:8px;
   background:rgba(251,191,36,0.12); border:1px solid rgba(251,191,36,0.3);
   border-radius:6px; color:#fbbf24; font-size:13px; font-weight:700;
   padding:10px 14px; cursor:pointer; font-family:inherit;
   text-align:center; min-height:44px;
+  /* no transition/animation — they can block click events in ST */
 }
 .calt-open-btn:active { background:rgba(251,191,36,0.25); }
 .calt-sec { margin-top:8px; border-top:1px solid rgba(255,255,255,0.05); padding-top:6px; }
@@ -75,8 +75,7 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-modal-tokens { font-size:11px; color:#2d3b55; white-space:nowrap; flex-shrink:0; margin:0 4px; }
 .calt-modal-x {
   background:none; border:none; color:#4a5568; font-size:16px; cursor:pointer;
-  padding:4px; line-height:1; font-family:inherit; flex-shrink:0; transition:color 0.15s;
-  touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+  padding:4px; line-height:1; font-family:inherit; flex-shrink:0;
 }
 .calt-modal-x:hover { color:#94a3b8; }
 
@@ -85,7 +84,7 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-tab {
   flex:1; padding:10px 8px; background:none; border:none; border-bottom:2px solid transparent;
   color:#4a5568; font-size:12px; font-weight:600; cursor:pointer; font-family:inherit;
-  transition:all 0.15s; white-space:nowrap; touch-action:manipulation; -webkit-tap-highlight-color:transparent;
+  white-space:nowrap;
 }
 .calt-tab:hover  { color:#94a3b8; }
 .calt-tab.active { color:#fbbf24; border-bottom-color:#fbbf24; }
