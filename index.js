@@ -77,6 +77,8 @@
     let day = '', month = '', year = '';
     for (const p of parts) {
       if (/^\d+$/.test(p)) { if (!day) day = p; else year = p; }
+      // Handle day ranges like "9-13" — use the start day for sorting/math
+      else if (/^\d+-\d+$/.test(p)) { if (!day) day = p.split('-')[0]; else year = p; }
       else month = p;
     }
     return { day, month, year };
@@ -740,6 +742,18 @@
   }
 
   // Restore pinned + tags from old events by matching text (with date as tiebreaker)
+  // Also uses word-overlap similarity to catch AI rephrases
+  function _wordSet(text) {
+    return new Set((text||'').toLowerCase().replace(/[^\w\s]/g,' ').split(/\s+/).filter(w => w.length > 2));
+  }
+  function _similarity(a, b) {
+    const sa = _wordSet(a), sb = _wordSet(b);
+    if (!sa.size || !sb.size) return 0;
+    let overlap = 0;
+    sa.forEach(w => { if (sb.has(w)) overlap++; });
+    return overlap / Math.max(sa.size, sb.size);
+  }
+
   function _restoreMetadata(parsed, oldEvents) {
     const byDateText = {}, byText = {};
     oldEvents.forEach(e => {
@@ -748,14 +762,30 @@
       const tk = e.text.toLowerCase().trim();
       if (!byText[tk]) byText[tk] = e;
     });
+    // Track which old events have been claimed (to prevent double-matching)
+    const claimed = new Set();
     parsed.forEach(e => {
       const dtKey = ((e.date||'') + '||' + e.text).toLowerCase();
       const tKey  = e.text.toLowerCase().trim();
-      const old   = byDateText[dtKey] || byText[tKey];
+      let old = byDateText[dtKey] || byText[tKey];
+      // Fuzzy match: if no exact match, try word-overlap similarity ≥ 0.5 on same date
+      if (!old) {
+        let bestSim = 0, bestMatch = null;
+        oldEvents.forEach(oe => {
+          if (claimed.has(oe.id)) return;
+          const sameDateish = (e.date||'') === (oe.date||'') ||
+            extractMonth(e.date) === extractMonth(oe.date);
+          if (!sameDateish) return;
+          const sim = _similarity(e.text, oe.text);
+          if (sim > bestSim && sim >= 0.5) { bestSim = sim; bestMatch = oe; }
+        });
+        if (bestMatch) old = bestMatch;
+      }
       if (old) {
         e.pinned = old.pinned || false;
         e.tags   = [...(old.tags || [])];
         e.id     = old.id; // keep stable ID if same event
+        claimed.add(old.id);
       }
     });
   }
@@ -770,20 +800,20 @@
         '\n\nOutput complete consolidated timeline:',
       'You are a chronicle archivist. Extract ONLY plot-critical FACTS.\n\n' +
         'RULES:\n' +
+        '- COPY ALL EXISTING entries below WORD-FOR-WORD. Do NOT rephrase, reword, or merge them.\n' +
+        '- ONLY ADD genuinely NEW events not already covered by existing entries\n' +
         '- ONE line per event: [DATE] What changed (MAX 15 words)\n' +
         '- RECORD ONLY: deaths, alliances, betrayals, discoveries, power shifts, pacts, injuries, escapes\n' +
         '- NEVER retell scenes, emotions, dialogue, descriptions, atmosphere\n' +
-        '- NEVER summarize what characters did moment-by-moment\n' +
         '- Each event = a PERMANENT CHANGE to the world state\n' +
-        '- CONSOLIDATE: if same date has related facts, merge into one line\n\n' +
+        '- If an existing entry already covers a topic, do NOT create a new variant\n\n' +
         'GOOD EXAMPLES:\n' +
         '- [14 Nov 2027] DSO squad killed; Leon found Selena in lab\n' +
-        '- [3 Mar 1044] Kael betrayed the Council; fled to the Wastes\n' +
-        '- [9 Jun 1044] Blood pact sealed between Mira and the Hollow King\n\n' +
+        '- [3 Mar 1044] Kael betrayed the Council; fled to the Wastes\n\n' +
         'BAD EXAMPLES (NEVER write like this):\n' +
-        '- [14 Nov] Leon enters the lab and discovers a survivor named Selena handcuffed to a case; they hide in a soundproof room from mutants\n' +
-        '- [3 Mar] Kael feels conflicted about his decision but ultimately chooses to leave\n\n' +
-        (existing ? 'EXISTING:\n' + existing : 'No existing events.')
+        '- [14 Nov] Leon enters the lab and discovers a survivor named Selena handcuffed to a case\n' +
+        '- Rephrasing an existing entry with different words\n\n' +
+        (existing ? 'EXISTING (copy these EXACTLY, then add new):\n' + existing : 'No existing events.')
     );
     let parsed = parseEventList(result, s.nextEventId);
     // Post-process: truncate oversized events to ~120 chars
@@ -803,26 +833,37 @@
     const existing = s.deadlines.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
     const past     = s.keyEvents.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
     const lore = getLorebook();
+    const currentDateInfo = s.currentDate ? 'CURRENT IN-WORLD DATE: ' + s.currentDate + '\n\n' : '';
     const result = await aiGenerate(
-      'CHAT:\n' + (getChatContext(depth)||'(empty)') +
+      currentDateInfo +
+        'CHAT:\n' + (getChatContext(depth)||'(empty)') +
         (lore ? '\n\nLOREBOOK:\n' + lore.slice(0,3000) : '') +
-        '\n\nList upcoming events:',
-      'Extract UPCOMING/ONGOING situations that affect future decisions.\n\n' +
-        'RULES:\n' +
-        '- ONE line per item: [DATE] What is pending/looming (MAX 12 words)\n' +
-        '- DATE = specific future date if known, or "ongoing" if no date\n' +
-        '- RECORD ONLY: threats, deadlines, scheduled events, unresolved dangers, pending quests\n' +
-        '- NEVER describe past events — only what WILL or MIGHT happen\n' +
-        '- NEVER retell scenes or add emotional detail\n' +
-        '- Preserve all existing items unchanged\n\n' +
-        'GOOD: [ongoing] Council Inquisitor Nae still at Academy; risk of exposure\n' +
-        'GOOD: [37 Caldeth 2027] Year\'s Last Breath festival\n' +
-        'BAD: Selena raises concerns about the lack of protection during intimacy bringing up questions\n\n' +
-        (existing ? 'EXISTING (keep all):\n' + existing + '\n\n' : '') +
-        (past ? 'ALREADY HAPPENED (exclude):\n' + past : '')
+        '\n\nList ONLY future threats and pending situations:',
+      'You extract FUTURE THREATS and PENDING SITUATIONS from roleplay chat.\n' +
+        'A deadline is something that HAS NOT HAPPENED YET but WILL or MIGHT happen.\n\n' +
+        'STRICT RULES:\n' +
+        '- COPY ALL EXISTING entries below WORD-FOR-WORD first\n' +
+        '- Then add ONLY genuinely NEW future/ongoing items\n' +
+        '- ONE line: [DATE or "ongoing"] Short description (MAX 12 words)\n' +
+        '- ONLY these categories: approaching threats, unresolved dangers, scheduled future events,\n' +
+        '  ongoing investigations, ticking time bombs, pending decisions with consequences\n' +
+        '- NEVER include: past actions, scene descriptions, character emotions, outfit changes,\n' +
+        '  conversations that already happened, completed events\n\n' +
+        'TEST: Ask yourself "Could this STILL go wrong or STILL happen?" If NO → do NOT include it.\n\n' +
+        'GOOD examples:\n' +
+        '- [ongoing] Inquisitor Nae investigating at Academy; risk of exposure\n' +
+        '- [37 Caldeth] Year\'s Last Breath — annual festival\n' +
+        '- [ongoing] Vanya\'s rehabilitation — may fail without consistent care\n\n' +
+        'BAD examples (NEVER write these — they are PAST EVENTS, not deadlines):\n' +
+        '- Selena changed her outfit ← past action, not a threat\n' +
+        '- Gasil and Selena had an intimate moment ← already happened\n' +
+        '- Characters discussed their feelings ← conversation, not deadline\n' +
+        '- They moved to a new room ← scene description, not threat\n\n' +
+        (existing ? 'EXISTING (copy EXACTLY, then add new):\n' + existing + '\n\n' : '') +
+        (past ? 'ALREADY HAPPENED (EXCLUDE ALL OF THESE):\n' + past : '')
     );
     let parsed = parseEventList(result, s.nextDeadlineId);
-    // Post-process: truncate oversized deadlines
+    // Post-process: truncate oversized
     parsed.forEach(e => {
       if (e.text.length > 100) {
         const dot = e.text.indexOf('. ');
@@ -830,7 +871,54 @@
         else e.text = e.text.slice(0, 97) + '...';
       }
     });
+    // Post-process: filter out items that look like past events (already in keyEvents)
+    if (past) {
+      const pastTexts = s.keyEvents.map(e => e.text.toLowerCase().trim());
+      parsed = parsed.filter(e => {
+        const eLower = e.text.toLowerCase().trim();
+        // Reject if it's nearly identical to an existing past event
+        for (const pt of pastTexts) {
+          if (_similarity(eLower, pt) >= 0.6) return false;
+        }
+        return true;
+      });
+    }
+    // Restore pinned/title/dtype from old deadlines
+    _restoreDeadlineMetadata(parsed, s.deadlines);
     return parsed;
+  }
+
+  // Restore deadline metadata (pinned, title, dtype) after rescan
+  function _restoreDeadlineMetadata(parsed, oldDeadlines) {
+    const byDateText = {}, byText = {};
+    oldDeadlines.forEach(e => {
+      const dtKey = ((e.date||'') + '||' + e.text).toLowerCase();
+      byDateText[dtKey] = e;
+      const tk = e.text.toLowerCase().trim();
+      if (!byText[tk]) byText[tk] = e;
+    });
+    const claimed = new Set();
+    parsed.forEach(e => {
+      const dtKey = ((e.date||'') + '||' + e.text).toLowerCase();
+      const tKey  = e.text.toLowerCase().trim();
+      let old = byDateText[dtKey] || byText[tKey];
+      if (!old) {
+        let bestSim = 0, bestMatch = null;
+        oldDeadlines.forEach(oe => {
+          if (claimed.has(oe.id)) return;
+          const sim = _similarity(e.text, oe.text);
+          if (sim > bestSim && sim >= 0.5) { bestSim = sim; bestMatch = oe; }
+        });
+        if (bestMatch) old = bestMatch;
+      }
+      if (old) {
+        e.pinned = old.pinned || false;
+        e.title  = old.title || '';
+        e.dtype  = old.dtype || 'event';
+        e.id     = old.id;
+        claimed.add(old.id);
+      }
+    });
   }
 
   async function generateMonthSummary(month) {
@@ -1733,10 +1821,11 @@
       e.stopPropagation(); openTagPicker(+$(this).data('id'), $(this).data('type'), $(this));
     });
 
-    // ── Pin ───────────────────────────────────────────────────────────────
+    // ── Pin (unified: works for both events and deadlines) ─────────────
     $('.calt-ev-pin').off('click').on('click', function() {
-      const id = +$(this).data('id'), s = getSettings();
-      const item = s.keyEvents.find(e => e.id === id); if (!item) return;
+      const id = +$(this).data('id'), type = $(this).data('type'), s = getSettings();
+      const arr = type === 'event' ? s.keyEvents : s.deadlines;
+      const item = arr.find(e => e.id === id); if (!item) return;
       item.pinned = !item.pinned;
       save(); updatePrompt(); renderTabContent();
       toast(item.pinned ? '📌 Закреплено' : 'Откреплено', item.pinned ? '#fbbf24' : '#94a3b8');
@@ -1795,17 +1884,8 @@
     });
     $('#calt_add_dl_txt').off('keydown').on('keydown', e => { if (e.key==='Enter') $('#calt_add_dl_btn').click(); });
 
-    // ── Deadline pin ──────────────────────────────────────────────────────
+    // ── Deadline type picker ──────────────────────────────────────────
     if (activeTab === 'deadlines') {
-      $('.calt-ev-pin[data-type="deadline"]').off('click').on('click', function() {
-        const id = +$(this).data('id'), s = getSettings();
-        const item = s.deadlines.find(e => e.id === id); if (!item) return;
-        item.pinned = !item.pinned;
-        save(); updatePrompt(); renderTabContent();
-        toast(item.pinned ? '📌 Закреплено в контексте' : 'Откреплено', item.pinned ? '#fbbf24' : '#94a3b8');
-      });
-
-      // ── Deadline type picker ──────────────────────────────────────────
       $('.calt-dl-type-btn').off('click').on('click', function(e) {
         e.stopPropagation();
         openDeadlineTypePicker(+$(this).data('id'), $(this));
