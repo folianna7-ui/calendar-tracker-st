@@ -62,9 +62,13 @@
     if (!dateStr || !dateStr.trim()) return null;
     const parts = dateStr.trim().split(/\s+/);
     for (let i = parts.length - 1; i >= 0; i--) {
-      if (!/^\d+$/.test(parts[i])) return parts[i];
+      // Skip pure digits AND digit ranges like "5-11"
+      if (/^\d+$/.test(parts[i]) || /^\d+-\d+$/.test(parts[i])) continue;
+      // Skip "Days", "Day", "Night" — these are prefixes, not months
+      if (/^(days?|nights?|week|weeks)$/i.test(parts[i])) continue;
+      return parts[i];
     }
-    return parts[parts.length - 1];
+    return null;
   }
 
   function currentMonth() { return extractMonth(getSettings().currentDate); }
@@ -898,32 +902,52 @@
       currentDateInfo +
         'CHAT:\n' + (getChatContext(depth)||'(empty)') +
         (lore ? '\n\nLOREBOOK:\n' + lore.slice(0,3000) : '') +
-        '\n\nOutput complete consolidated timeline:',
-      'You are a chronicle archivist creating a COMPACT TIMELINE.\n\n' +
-        'CRITICAL RULES:\n' +
-        '- COPY ALL EXISTING entries WORD-FOR-WORD first. Never rephrase.\n' +
-        '- Then add NEW events from the chat\n' +
-        '- ONE LINE PER DAY: merge all events of the same day with → separator\n' +
-        '- Format: [DATE] event1 → event2 → event3\n' +
-        '- If multiple days are uneventful, merge: [Days 5-8] relative calm, training sessions\n' +
-        '- MAX 20 words per line. Be TELEGRAPHIC: nouns and verbs, no adjectives\n' +
-        '- ONLY state facts: who did what, what changed, who died/arrived/left\n' +
-        '- NEVER: emotions, descriptions, atmosphere, "characters discussed feelings"\n\n' +
-        'GOOD:\n' +
-        '- [2 Ossian 1000] Arrival through Abyss → Gasil\'s office → Eastern Wing assigned\n' +
-        '- [3 Ossian] Great Hall → verbal attack on Daron student → etheric burns → infirmary\n' +
-        '- [Days 5-8] Training sessions with Gasil. Quiet period.\n\n' +
-        'BAD:\n' +
-        '- [2 Ossian] Selena arrives at the Academy\n' +
-        '- [2 Ossian] She goes to Gasil\'s office  ← WRONG: same day, merge into one line!\n' +
-        '- [3 Ossian] Selena felt nervous during breakfast ← WRONG: not a fact\n\n' +
-        (existing ? 'EXISTING (copy EXACTLY, then add new):\n' + existing : 'No existing events.')
+        '\n\nOutput ONLY NEW events not in EXISTING:',
+      'You are a chronicle archivist. Read the chat and output ONLY NEW plot-critical events.\n\n' +
+        'CRITICAL: Output ONLY events that are NOT already in the EXISTING list below.\n' +
+        'If everything is already covered, output NOTHING (empty response).\n\n' +
+        'FORMAT RULES:\n' +
+        '- ONE LINE PER DAY: [DATE] event1 → event2 → event3\n' +
+        '- Merge all events of the same day with → separator\n' +
+        '- If multiple days are uneventful, merge: [Days 5-8] quiet period\n' +
+        '- MAX 20 words per line. Telegraphic: nouns and verbs only\n' +
+        '- ONLY facts: arrivals, departures, fights, pacts, injuries, deaths, discoveries\n' +
+        '- NEVER: emotions, descriptions, atmosphere, dialogue\n\n' +
+        'GOOD: [3 Ossian] Great Hall → verbal attack on Daron student → etheric burns → infirmary\n' +
+        'BAD: [3 Ossian] Selena felt nervous ← emotion, not a fact\n\n' +
+        (existing ? 'EXISTING (already recorded — do NOT repeat any of these):\n' + existing : 'No existing events.')
     );
-    let parsed = parseEventList(result, s.nextEventId);
-    // Post-process: merge any remaining same-date entries that AI didn't merge
-    parsed = _mergeSameDate(parsed);
-    _restoreMetadata(parsed, s.keyEvents);
-    return parsed;
+    // Parse only the new events AI returned
+    let newEvents = parseEventList(result, s.nextEventId);
+    if (!newEvents.length) return s.keyEvents; // nothing new — return unchanged
+    // Filter out anything that's too similar to existing
+    newEvents = newEvents.filter(ne => {
+      for (const oe of s.keyEvents) {
+        if (_similarity(ne.text, oe.text) >= 0.45) return false;
+        // Same date + high overlap = duplicate
+        if (ne.date && ne.date === oe.date && _similarity(ne.text, oe.text) >= 0.3) return false;
+      }
+      return true;
+    });
+    if (!newEvents.length) return s.keyEvents; // all filtered as dupes
+    // Merge same-date new events
+    newEvents = _mergeSameDate(newEvents);
+    // Also try to merge new events into existing same-date entries
+    const merged = [...s.keyEvents];
+    newEvents.forEach(ne => {
+      const existingIdx = merged.findIndex(oe => 
+        ne.date && oe.date && ne.date.toLowerCase() === oe.date.toLowerCase()
+      );
+      if (existingIdx >= 0) {
+        // Append to existing same-date entry
+        merged[existingIdx].text += ' → ' + ne.text;
+      } else {
+        // New date — add as separate entry
+        ne.id = s.nextEventId++;
+        merged.push(ne);
+      }
+    });
+    return merged;
   }
 
   // Merge parsed events that share the same date into one line
@@ -953,59 +977,87 @@
     const existing = s.deadlines.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
     const past     = s.keyEvents.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
     const lore = getLorebook();
-    const currentDateInfo = s.currentDate ? 'CURRENT IN-WORLD DATE: ' + s.currentDate + '\n\n' : '';
+
+    // Build rich date context so AI can calculate dates
+    let dateContext = '';
+    if (s.currentDate) {
+      dateContext = 'CURRENT IN-WORLD DATE: ' + s.currentDate + '\n';
+      const cc = s.calendarConfig;
+      if (cc.months.length) {
+        const mi = cc.months.findIndex(m => m.name.toLowerCase() === (s.currentMonthName||'').toLowerCase());
+        if (mi >= 0) {
+          const curMonth = cc.months[mi];
+          const nextMonth = cc.months[(mi + 1) % cc.months.length];
+          dateContext += 'Current month ' + curMonth.name + ' has ' + (curMonth.days||30) + ' days. ';
+          dateContext += 'Next month: ' + nextMonth.name + '.\n';
+          dateContext += 'CALCULATE specific dates from time phrases: "in 3 days" = add 3 to current day.\n';
+        }
+      }
+      dateContext += '\n';
+    }
+
     const result = await aiGenerate(
-      currentDateInfo +
+      dateContext +
         'CHAT:\n' + (getChatContext(depth)||'(empty)') +
         (lore ? '\n\nLOREBOOK:\n' + lore.slice(0,3000) : '') +
-        '\n\nList ONLY future threats and pending situations:',
-      'You extract FUTURE THREATS and PENDING SITUATIONS from roleplay chat.\n' +
-        'A deadline is something that HAS NOT HAPPENED YET but WILL or MIGHT happen.\n\n' +
-        'STRICT RULES:\n' +
-        '- COPY ALL EXISTING entries below WORD-FOR-WORD first\n' +
-        '- Then add ONLY genuinely NEW future/ongoing items\n' +
-        '- ONE line: [DATE or "ongoing"] Short description (MAX 12 words)\n' +
-        '- ONLY these categories: approaching threats, unresolved dangers, scheduled future events,\n' +
-        '  ongoing investigations, ticking time bombs, pending decisions with consequences\n' +
-        '- NEVER include: past actions, scene descriptions, character emotions, outfit changes,\n' +
-        '  conversations that already happened, completed events\n\n' +
-        'TEST: Ask yourself "Could this STILL go wrong or STILL happen?" If NO → do NOT include it.\n\n' +
-        'GOOD examples:\n' +
-        '- [ongoing] Inquisitor Nae investigating at Academy; risk of exposure\n' +
-        '- [37 Caldeth] Year\'s Last Breath — annual festival\n' +
-        '- [ongoing] Vanya\'s rehabilitation — may fail without consistent care\n\n' +
-        'BAD examples (NEVER write these — they are PAST EVENTS, not deadlines):\n' +
-        '- Selena changed her outfit ← past action, not a threat\n' +
-        '- Gasil and Selena had an intimate moment ← already happened\n' +
-        '- Characters discussed their feelings ← conversation, not deadline\n' +
-        '- They moved to a new room ← scene description, not threat\n\n' +
-        (existing ? 'EXISTING (copy EXACTLY, then add new):\n' + existing + '\n\n' : '') +
-        (past ? 'ALREADY HAPPENED (EXCLUDE ALL OF THESE):\n' + past : '')
+        '\n\nExtract CONCRETE upcoming events with specific dates:',
+      'You scan roleplay chat for CONCRETE UPCOMING EVENTS with TIME PRESSURE.\n\n' +
+        'YOUR JOB: Find where characters mention future arrivals, deadlines, scheduled events,\n' +
+        'approaching dangers WITH a time reference. CALCULATE the specific in-world date.\n\n' +
+        'RULES:\n' +
+        '- Output ONLY items NOT in EXISTING list. If nothing new, output NOTHING.\n' +
+        '- ALWAYS calculate a specific date when time is mentioned:\n' +
+        '  "in 3 days" + current date 14 Naeris \u2192 [17 Naeris]\n' +
+        '  "next week" + current date 14 Naeris \u2192 [~21 Naeris]\n' +
+        '  "before month end" + month has 30 days \u2192 [30 Naeris]\n' +
+        '- Use [ongoing] ONLY for active persistent dangers with NO time reference at all\n' +
+        '- Format: [DATE] Who/what arrives/happens/threatens (MAX 15 words)\n\n' +
+        'EXTRACT THESE:\n' +
+        '\u2713 Arrivals: "House X arrives in 3 days" \u2192 [17 Naeris] House X delegation arrives; potential conflict\n' +
+        '\u2713 Deadlines: "ritual must complete by full moon" \u2192 [DATE] Ritual deadline at full moon\n' +
+        '\u2713 Threats: "inquisitor returns before month end" \u2192 [~30 Naeris] Inquisitor returns for inspection\n' +
+        '\u2713 Ongoing: [ongoing] Active investigation by Inquisitor; discovery = exposure\n\n' +
+        'REJECT THESE (NOT deadlines):\n' +
+        '\u2717 Character traits or secrets: "Gasil\'s secret" \u2190 not an event, no date\n' +
+        '\u2717 Prophecies without timeline: "Selena is chosen" \u2190 not actionable\n' +
+        '\u2717 Vague states: "danger exists", "anomaly detected" \u2190 no specifics\n' +
+        '\u2717 Past events: anything that already happened\n' +
+        '\u2717 Entries shorter than 10 words\n\n' +
+        'LITMUS TEST: Does this answer "WHAT happens WHEN and WHY is it dangerous?" If not \u2192 reject.\n\n' +
+        (existing ? 'EXISTING (do NOT repeat):\n' + existing + '\n\n' : '') +
+        (past ? 'PAST EVENTS (EXCLUDE):\n' + past : '')
     );
-    let parsed = parseEventList(result, s.nextDeadlineId);
-    // Post-process: truncate oversized
-    parsed.forEach(e => {
+    let newDls = parseEventList(result, s.nextDeadlineId);
+    // Filter: reject short garbage entries
+    newDls = newDls.filter(e => e.text.length >= 15);
+    // Truncate oversized
+    newDls.forEach(e => {
       if (e.text.length > 100) {
         const dot = e.text.indexOf('. ');
         if (dot > 0 && dot < 90) e.text = e.text.slice(0, dot + 1);
         else e.text = e.text.slice(0, 97) + '...';
       }
     });
-    // Post-process: filter out items that look like past events (already in keyEvents)
-    if (past) {
-      const pastTexts = s.keyEvents.map(e => e.text.toLowerCase().trim());
-      parsed = parsed.filter(e => {
-        const eLower = e.text.toLowerCase().trim();
-        // Reject if it's nearly identical to an existing past event
-        for (const pt of pastTexts) {
-          if (_similarity(eLower, pt) >= 0.6) return false;
-        }
-        return true;
-      });
-    }
-    // Restore pinned/title/dtype from old deadlines
-    _restoreDeadlineMetadata(parsed, s.deadlines);
-    return parsed;
+    // Filter out duplicates of existing deadlines
+    newDls = newDls.filter(ne => {
+      for (const oe of s.deadlines) {
+        if (_similarity(ne.text, oe.text) >= 0.45) return false;
+      }
+      // Also filter out past events
+      for (const oe of s.keyEvents) {
+        if (_similarity(ne.text, oe.text) >= 0.5) return false;
+      }
+      return true;
+    });
+    if (!newDls.length) return s.deadlines; // nothing new
+    // Assign IDs and add defaults
+    newDls.forEach(e => {
+      e.id = s.nextDeadlineId++;
+      e.pinned = false;
+      e.title = '';
+      e.dtype = 'event';
+    });
+    return [...s.deadlines, ...newDls];
   }
 
   // Restore deadline metadata (pinned, title, dtype) after rescan
@@ -2078,18 +2130,22 @@
       $btn.prop('disabled',true).text('Сканирую…'); $st.css('color','#7a8499').text('Анализирую…');
       try {
         const s=getSettings(), snap=JSON.stringify(s.keyEvents);
+        const oldCount = s.keyEvents.length;
         const events = await scanKeyEvents(depth);
-        if (events.length) {
-          s.keyEvents = events;
-          s.nextEventId = Math.max(0, ...events.map(e => e.id||0)) + 1;
+        s.keyEvents = events;
+        s.nextEventId = Math.max(0, ...events.map(e => e.id||0)) + 1;
+        const newCount = events.length - oldCount;
+        if (newCount > 0) {
           save(); updatePrompt(); updateMeta(); renderTabContent();
-          $st.css('color','#34d399').text('✅ ' + events.length + ' событий');
-          toast('Таймлайн обновлён', '#34d399', () => {
+          $st.css('color','#34d399').text('✅ +' + newCount + ' новых (всего ' + events.length + ')');
+          toast('Добавлено ' + newCount + ' событий', '#34d399', () => {
             s.keyEvents = JSON.parse(snap);
             s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
             save(); updatePrompt(); updateMeta(); renderTabContent();
           });
-        } else { $st.css('color','#f59e0b').text('Новых событий не найдено'); }
+        } else {
+          $st.css('color','#f59e0b').text('Новых событий не найдено');
+        }
       } catch(e) { $st.css('color','#f87171').text('✗ ' + e.message); }
       $btn.prop('disabled',false).text('✦ Сканировать');
     });
@@ -2175,18 +2231,20 @@
       $btn.prop('disabled',true).text('Сканирую…'); $st.css('color','#7a8499').text('Анализирую…');
       try {
         const s=getSettings(), snap=JSON.stringify(s.deadlines);
+        const oldCount = s.deadlines.length;
         const deadlines = await scanDeadlines(depth);
-        if (deadlines.length) {
-          s.deadlines = deadlines;
-          s.nextDeadlineId = Math.max(0, ...deadlines.map(e => e.id||0)) + 1;
+        s.deadlines = deadlines;
+        s.nextDeadlineId = Math.max(0, ...deadlines.map(e => e.id||0)) + 1;
+        const newCount = deadlines.length - oldCount;
+        if (newCount > 0) {
           save(); updatePrompt(); updateMeta(); renderTabContent();
-          $st.css('color','#34d399').text('✅ ' + deadlines.length);
-          toast('Дедлайны обновлены', '#fbbf24', () => {
+          $st.css('color','#34d399').text('✅ +' + newCount + ' новых');
+          toast('Добавлено ' + newCount + ' дедлайнов', '#fbbf24', () => {
             s.deadlines = JSON.parse(snap);
             s.nextDeadlineId = Math.max(0, ...s.deadlines.map(e => e.id||0)) + 1;
             save(); updatePrompt(); updateMeta(); renderTabContent();
           });
-        } else { $st.css('color','#f59e0b').text('Не найдено'); }
+        } else { $st.css('color','#f59e0b').text('Новых не найдено'); }
       } catch(e) { $st.css('color','#f87171').text('✗ ' + e.message); }
       $btn.prop('disabled',false).text('✦ Сканировать');
     });
@@ -2531,25 +2589,24 @@
         const sig = await isMessageSignificant(lastMsg ? (lastMsg.mes||'') : '');
         if (!sig) return;
         const evSnap = JSON.stringify(s.keyEvents), dlSnap = JSON.stringify(s.deadlines);
+        const oldEvCount = s.keyEvents.length, oldDlCount = s.deadlines.length;
         const [events, deadlines] = await Promise.all([
           scanKeyEvents(s.scanDepth),
           scanDeadlines(s.scanDepth),
         ]);
-        let changed = false;
-        if (events.length) {
+        const newEvCount = events.length - oldEvCount;
+        const newDlCount = deadlines.length - oldDlCount;
+        if (newEvCount > 0 || newDlCount > 0) {
           s.keyEvents = events;
-          s.nextEventId = Math.max(0, ...events.map(e => e.id||0)) + 1;
-          changed = true;
-        }
-        if (deadlines.length) {
           s.deadlines = deadlines;
+          s.nextEventId = Math.max(0, ...events.map(e => e.id||0)) + 1;
           s.nextDeadlineId = Math.max(0, ...deadlines.map(e => e.id||0)) + 1;
-          changed = true;
-        }
-        if (changed) {
           save(); updatePrompt(); updateMeta();
           if (_isModalOpen()) renderTabContent();
-          toast('Таймлайн обновлён автоматически', '#34d399', () => {
+          const parts = [];
+          if (newEvCount > 0) parts.push('+' + newEvCount + ' событий');
+          if (newDlCount > 0) parts.push('+' + newDlCount + ' дедлайнов');
+          toast('Автоскан: ' + parts.join(', '), '#34d399', () => {
             s.keyEvents  = JSON.parse(evSnap);
             s.deadlines  = JSON.parse(dlSnap);
             s.nextEventId    = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
