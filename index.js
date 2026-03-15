@@ -694,13 +694,23 @@
     return null;
   }
 
-  // Normalize endpoint: ensure trailing slash, ensure /v1/ path if needed
+  // Normalize endpoint: strip trailing slashes and /chat/completions
   function _normalizeEndpoint(url) {
     if (!url) return '';
     url = url.trim().replace(/\/+$/, '');
-    // If it already ends with /chat/completions — strip it, we add it ourselves
     url = url.replace(/\/chat\/completions$/, '').replace(/\/+$/, '');
     return url;
+  }
+
+  // Detect API type from endpoint URL
+  function _apiType(ep) {
+    if (!ep) return 'openai';
+    // Gemini with /openai/ path = OpenAI-compatible mode (Bearer auth)
+    if (ep.includes('generativelanguage.googleapis.com') && ep.includes('/openai')) return 'openai';
+    // Bare Gemini URL without /openai/ = native Gemini format (key in URL)
+    if (ep.includes('generativelanguage.googleapis.com')) return 'gemini-native';
+    // Everything else = OpenAI-compatible
+    return 'openai';
   }
 
   async function _callCustomApi(systemPrompt, userPrompt) {
@@ -708,24 +718,28 @@
     const ep = _normalizeEndpoint(s.customApiEndpoint);
     if (!ep || !s.customApiKey) return null;
     const headers = { 'Content-Type': 'application/json' };
-    // Detect Gemini vs OpenAI-compatible
-    const isGemini = ep.includes('generativelanguage.googleapis.com');
-    if (isGemini) {
-      // Gemini REST API format
+    const type = _apiType(ep);
+
+    if (type === 'gemini-native') {
+      // Native Gemini REST API: key in URL, specific body format
       const model = s.customApiModel || 'models/gemini-flash-lite-latest';
-      const gemUrl = ep.replace(/\/+$/, '') + '/' + model + ':generateContent?key=' + s.customApiKey;
+      const modelPath = model.startsWith('models/') ? model : 'models/' + model;
+      const gemUrl = ep + '/' + modelPath + ':generateContent?key=' + s.customApiKey;
       const body = {
         contents: [{ parts: [{ text: systemPrompt + '\n\n---\n\n' + userPrompt }] }],
         generationConfig: { maxOutputTokens: 2000 }
       };
       const r = await fetch(gemUrl, { method:'POST', headers, body:JSON.stringify(body) });
-      if (!r.ok) throw new Error('Gemini API ' + r.status + ': ' + (await r.text()).slice(0,200));
+      if (!r.ok) throw new Error('Gemini ' + r.status + ': ' + (await r.text()).slice(0,200));
       return extractAiText(await r.json());
     } else {
-      // OpenAI-compatible chat completions
+      // OpenAI-compatible (works for OpenAI, Gemini /openai/, OpenRouter, etc.)
       headers['Authorization'] = 'Bearer ' + s.customApiKey;
+      const model = s.customApiModel || 'gpt-3.5-turbo';
+      // For Gemini OpenAI-compatible, model should be just the name without models/ prefix
+      const modelName = model.replace(/^models\//, '');
       const body = {
-        model: s.customApiModel || 'gpt-3.5-turbo',
+        model: modelName,
         messages: [
           { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt },
@@ -744,13 +758,16 @@
     const s = getSettings();
     const ep = _normalizeEndpoint(s.customApiEndpoint);
     if (!ep || !s.customApiKey) throw new Error('Введите endpoint и API key');
-    const isGemini = ep.includes('generativelanguage.googleapis.com');
-    if (isGemini) {
-      const r = await fetch(ep.replace(/\/+$/, '') + '/models?key=' + s.customApiKey);
+    const type = _apiType(ep);
+
+    if (type === 'gemini-native') {
+      // Native Gemini: models endpoint with key in URL
+      const r = await fetch(ep + '/models?key=' + s.customApiKey);
       if (!r.ok) throw new Error('Gemini ' + r.status);
       const data = await r.json();
       return (data.models || []).map(m => m.name || m.id).filter(Boolean);
     } else {
+      // OpenAI-compatible: /models with Bearer auth
       const r = await fetch(ep + '/models', {
         headers: { 'Authorization': 'Bearer ' + s.customApiKey }
       });
