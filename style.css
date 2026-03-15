@@ -1,5 +1,5 @@
 /* ================================================================
-   Calendar Tracker v5.0 — Style Sheet
+   Calendar Tracker v5.1 — Style Sheet
    ================================================================ */
 
 /* ── Settings panel ─────────────────────────────────────────── */
@@ -549,4 +549,21 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 /* ── v5.0: Settings depth rows ─────────────────────────────── */
 .calt-field-row .calt-flabel {
   min-width:82px;
+}
+
+/* ── v5.1: Condense button ─────────────────────────────────── */
+#calt_condense_btn {
+  background:rgba(167,139,250,0.12) !important;
+  border-color:rgba(167,139,250,0.25) !important;
+  color:#c4b5fd !important;
+}
+#calt_condense_btn:hover {
+  background:rgba(167,139,250,0.22) !important;
+}
+
+/* ── v5.1: API settings inputs ─────────────────────────────── */
+.calt-sec-body .calt-einput {
+  font-size:12px;
+  padding:6px 8px;
+  margin-bottom:2px;
 }

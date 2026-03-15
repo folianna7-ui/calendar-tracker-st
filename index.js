@@ -1,5 +1,5 @@
 /**
- * Calendar Tracker v5.0 — SillyTavern Extension
+ * Calendar Tracker v5.1 — SillyTavern Extension
  *
  * Changes vs v4.0:
  *  [NEW]  Three separate injection depths: Rules(0), Deadlines(1), Timeline(4)
@@ -105,9 +105,10 @@
       keyEvents:[], deadlines:[],
       calendarRules:'',
       calendarConfig: defaultCalendarConfig(),
-      autoScan:false, scanDepth:20,
+      autoScan:false, scanDepth:20, autoScanThreshold:3,
       depthRules:0, depthDeadlines:1, depthTimeline:4,
       deadlineHorizon:7,
+      customApiEndpoint:'', customApiKey:'', customApiModel:'',
       monthSummaries:{}, monthSummarySnaps:{},
       manualHotMonths:[], manualColdMonths:[],
       nextEventId:1, nextDeadlineId:1,
@@ -147,6 +148,10 @@
     if (s.depthDeadlines === undefined) s.depthDeadlines = 1;
     if (s.depthTimeline === undefined) s.depthTimeline = 4;
     if (s.deadlineHorizon === undefined) s.deadlineHorizon = 7;
+    if (s.autoScanThreshold === undefined) s.autoScanThreshold = 3;
+    if (s.customApiEndpoint === undefined) s.customApiEndpoint = '';
+    if (s.customApiKey === undefined) s.customApiKey = '';
+    if (s.customApiModel === undefined) s.customApiModel = '';
     if (!s.calendarConfig || typeof s.calendarConfig !== 'object') s.calendarConfig = defaultCalendarConfig();
     const cc = s.calendarConfig;
     if (!Array.isArray(cc.months))   cc.months   = [];
@@ -684,10 +689,87 @@
     if (typeof data?.response === 'string')  return data.response;
     if (Array.isArray(data?.content)) { const t = data.content.find(b => b.type==='text'); return t?.text ?? null; }
     if (typeof data?.content === 'string') return data.content;
+    // Gemini format
+    if (data?.candidates?.[0]?.content?.parts?.[0]?.text) return data.candidates[0].content.parts[0].text;
     return null;
   }
 
+  // Normalize endpoint: ensure trailing slash, ensure /v1/ path if needed
+  function _normalizeEndpoint(url) {
+    if (!url) return '';
+    url = url.trim().replace(/\/+$/, '');
+    // If it already ends with /chat/completions — strip it, we add it ourselves
+    url = url.replace(/\/chat\/completions$/, '').replace(/\/+$/, '');
+    return url;
+  }
+
+  async function _callCustomApi(systemPrompt, userPrompt) {
+    const s = getSettings();
+    const ep = _normalizeEndpoint(s.customApiEndpoint);
+    if (!ep || !s.customApiKey) return null;
+    const headers = { 'Content-Type': 'application/json' };
+    // Detect Gemini vs OpenAI-compatible
+    const isGemini = ep.includes('generativelanguage.googleapis.com');
+    if (isGemini) {
+      // Gemini REST API format
+      const model = s.customApiModel || 'models/gemini-flash-lite-latest';
+      const gemUrl = ep.replace(/\/+$/, '') + '/' + model + ':generateContent?key=' + s.customApiKey;
+      const body = {
+        contents: [{ parts: [{ text: systemPrompt + '\n\n---\n\n' + userPrompt }] }],
+        generationConfig: { maxOutputTokens: 2000 }
+      };
+      const r = await fetch(gemUrl, { method:'POST', headers, body:JSON.stringify(body) });
+      if (!r.ok) throw new Error('Gemini API ' + r.status + ': ' + (await r.text()).slice(0,200));
+      return extractAiText(await r.json());
+    } else {
+      // OpenAI-compatible chat completions
+      headers['Authorization'] = 'Bearer ' + s.customApiKey;
+      const body = {
+        model: s.customApiModel || 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        max_tokens: 2000,
+        stream: false,
+      };
+      const chatUrl = ep + '/chat/completions';
+      const r = await fetch(chatUrl, { method:'POST', headers, body:JSON.stringify(body) });
+      if (!r.ok) throw new Error('API ' + r.status + ': ' + (await r.text()).slice(0,200));
+      return extractAiText(await r.json());
+    }
+  }
+
+  async function _fetchModels() {
+    const s = getSettings();
+    const ep = _normalizeEndpoint(s.customApiEndpoint);
+    if (!ep || !s.customApiKey) throw new Error('Введите endpoint и API key');
+    const isGemini = ep.includes('generativelanguage.googleapis.com');
+    if (isGemini) {
+      const r = await fetch(ep.replace(/\/+$/, '') + '/models?key=' + s.customApiKey);
+      if (!r.ok) throw new Error('Gemini ' + r.status);
+      const data = await r.json();
+      return (data.models || []).map(m => m.name || m.id).filter(Boolean);
+    } else {
+      const r = await fetch(ep + '/models', {
+        headers: { 'Authorization': 'Bearer ' + s.customApiKey }
+      });
+      if (!r.ok) throw new Error('API ' + r.status);
+      const data = await r.json();
+      return (data.data || data.models || []).map(m => m.id || m.name).filter(Boolean);
+    }
+  }
+
   async function aiGenerate(userPrompt, systemPrompt) {
+    // Try custom API first if configured
+    const s = getSettings();
+    if (s.customApiEndpoint && s.customApiKey) {
+      try {
+        const r = await _callCustomApi(systemPrompt, userPrompt);
+        if (r?.trim()) return r;
+      } catch(e) { console.warn('[CalTracker] custom API failed:', e.message); }
+    }
+    // Fallback: ST built-in
     const c = ctx(), full = systemPrompt + '\n\n---\n\n' + userPrompt;
     if (typeof c.generateRaw === 'function') {
       try { const r = await c.generateRaw(full,'',false,false,'','normal'); if (r?.trim()) return r; }
@@ -706,7 +788,7 @@
         if (t?.trim()) return t;
       } catch(e) { /* try next endpoint */ }
     }
-    throw new Error('Нет активного подключения. Выбери Connection Profile в ST.');
+    throw new Error('Нет подключения. Настройте API или Connection Profile.');
   }
 
   function getChatContext(depth) {
@@ -794,38 +876,59 @@
     const s = getSettings();
     const existing = s.keyEvents.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
     const lore = getLorebook();
+    const currentDateInfo = s.currentDate ? 'CURRENT IN-WORLD DATE: ' + s.currentDate + '\n\n' : '';
     const result = await aiGenerate(
-      'CHAT:\n' + (getChatContext(depth)||'(empty)') +
+      currentDateInfo +
+        'CHAT:\n' + (getChatContext(depth)||'(empty)') +
         (lore ? '\n\nLOREBOOK:\n' + lore.slice(0,3000) : '') +
         '\n\nOutput complete consolidated timeline:',
-      'You are a chronicle archivist. Extract ONLY plot-critical FACTS.\n\n' +
-        'RULES:\n' +
-        '- COPY ALL EXISTING entries below WORD-FOR-WORD. Do NOT rephrase, reword, or merge them.\n' +
-        '- ONLY ADD genuinely NEW events not already covered by existing entries\n' +
-        '- ONE line per event: [DATE] What changed (MAX 15 words)\n' +
-        '- RECORD ONLY: deaths, alliances, betrayals, discoveries, power shifts, pacts, injuries, escapes\n' +
-        '- NEVER retell scenes, emotions, dialogue, descriptions, atmosphere\n' +
-        '- Each event = a PERMANENT CHANGE to the world state\n' +
-        '- If an existing entry already covers a topic, do NOT create a new variant\n\n' +
-        'GOOD EXAMPLES:\n' +
-        '- [14 Nov 2027] DSO squad killed; Leon found Selena in lab\n' +
-        '- [3 Mar 1044] Kael betrayed the Council; fled to the Wastes\n\n' +
-        'BAD EXAMPLES (NEVER write like this):\n' +
-        '- [14 Nov] Leon enters the lab and discovers a survivor named Selena handcuffed to a case\n' +
-        '- Rephrasing an existing entry with different words\n\n' +
-        (existing ? 'EXISTING (copy these EXACTLY, then add new):\n' + existing : 'No existing events.')
+      'You are a chronicle archivist creating a COMPACT TIMELINE.\n\n' +
+        'CRITICAL RULES:\n' +
+        '- COPY ALL EXISTING entries WORD-FOR-WORD first. Never rephrase.\n' +
+        '- Then add NEW events from the chat\n' +
+        '- ONE LINE PER DAY: merge all events of the same day with → separator\n' +
+        '- Format: [DATE] event1 → event2 → event3\n' +
+        '- If multiple days are uneventful, merge: [Days 5-8] relative calm, training sessions\n' +
+        '- MAX 20 words per line. Be TELEGRAPHIC: nouns and verbs, no adjectives\n' +
+        '- ONLY state facts: who did what, what changed, who died/arrived/left\n' +
+        '- NEVER: emotions, descriptions, atmosphere, "characters discussed feelings"\n\n' +
+        'GOOD:\n' +
+        '- [2 Ossian 1000] Arrival through Abyss → Gasil\'s office → Eastern Wing assigned\n' +
+        '- [3 Ossian] Great Hall → verbal attack on Daron student → etheric burns → infirmary\n' +
+        '- [Days 5-8] Training sessions with Gasil. Quiet period.\n\n' +
+        'BAD:\n' +
+        '- [2 Ossian] Selena arrives at the Academy\n' +
+        '- [2 Ossian] She goes to Gasil\'s office  ← WRONG: same day, merge into one line!\n' +
+        '- [3 Ossian] Selena felt nervous during breakfast ← WRONG: not a fact\n\n' +
+        (existing ? 'EXISTING (copy EXACTLY, then add new):\n' + existing : 'No existing events.')
     );
     let parsed = parseEventList(result, s.nextEventId);
-    // Post-process: truncate oversized events to ~120 chars
-    parsed.forEach(e => {
-      if (e.text.length > 120) {
-        const dot = e.text.indexOf('. ');
-        if (dot > 0 && dot < 110) e.text = e.text.slice(0, dot + 1);
-        else e.text = e.text.slice(0, 117) + '...';
-      }
-    });
+    // Post-process: merge any remaining same-date entries that AI didn't merge
+    parsed = _mergeSameDate(parsed);
     _restoreMetadata(parsed, s.keyEvents);
     return parsed;
+  }
+
+  // Merge parsed events that share the same date into one line
+  function _mergeSameDate(events) {
+    const byDate = new Map();
+    const order = [];
+    events.forEach(e => {
+      const key = (e.date || '').toLowerCase().trim();
+      if (!key) { order.push(e); return; } // dateless events stay separate
+      if (byDate.has(key)) {
+        byDate.get(key).text += ' → ' + e.text;
+        // Inherit tags and pinned from merged
+        if (e.pinned) byDate.get(key).pinned = true;
+        (e.tags||[]).forEach(t => {
+          if (!byDate.get(key).tags.includes(t)) byDate.get(key).tags.push(t);
+        });
+      } else {
+        byDate.set(key, e);
+        order.push(e);
+      }
+    });
+    return order;
   }
 
   async function scanDeadlines(depth) {
@@ -1000,7 +1103,12 @@
         <div class="calt-body" id="calt_body">
           <div class="calt-meta" id="calt_meta">нет данных</div>
           <label class="calt-check-row"><input type="checkbox" id="calt_enabled" style="accent-color:#fbbf24"><span>Включено (инжект в промпт)</span></label>
-          <label class="calt-check-row"><input type="checkbox" id="calt_autoscan" style="accent-color:#fbbf24"><span>Авто-сканирование (каждые 3 сообщения)</span></label>
+          <label class="calt-check-row"><input type="checkbox" id="calt_autoscan" style="accent-color:#fbbf24"><span>Авто-сканирование</span></label>
+          <div class="calt-field-row" style="margin-top:2px">
+            <span class="calt-flabel">Каждые</span>
+            <input type="number" class="calt-depth-inp" id="calt_autoscan_threshold" min="1" max="50" style="width:42px" value="3">
+            <span style="font-size:10px;color:#3d4a60">сообщений</span>
+          </div>
           <div class="calt-field-label">Текущая дата</div>
           <div class="calt-date3-row" id="calt_date3_panel"></div>
           <div class="calt-field-label">Глубина инжекции</div>
@@ -1030,13 +1138,22 @@
           </div>
           <button class="menu_button calt-open-btn" id="calt_open_btn">📖 Открыть календарь</button>
           <div class="calt-sec" id="calt_conn_wrap">
-            <div class="calt-sec-hdr" id="calt_conn_hdr"><span class="calt-sec-chev" id="calt_conn_chev">▸</span><span>🔌 Подключение</span></div>
+            <div class="calt-sec-hdr" id="calt_conn_hdr"><span class="calt-sec-chev" id="calt_conn_chev">▸</span><span>⚙ API для сканирования</span></div>
             <div class="calt-sec-body" id="calt_conn_body" style="display:none">
-              <div class="calt-conn-status">
-                <span class="calt-conn-dot" id="calt_conn_dot" style="color:#fbbf24">●</span>
-                <span class="calt-conn-label" id="calt_conn_label">Активный профиль ST</span>
+              <p class="calt-conn-hint">Вставь endpoint (с /v1 или без — не важно), введи ключ, загрузи список моделей кнопкой 📋 и нажми «Сканировать». Если оставить пустым — используется встроенный ST.</p>
+              <div class="calt-field-label">ENDPOINT</div>
+              <input class="calt-einput" id="calt_api_endpoint" placeholder="https://generativelanguage.googleapis.com/v1beta/openai/" style="width:100%;box-sizing:border-box;margin-bottom:4px">
+              <div class="calt-field-label">API KEY</div>
+              <div style="display:flex;gap:4px;align-items:center;margin-bottom:4px">
+                <input class="calt-einput" id="calt_api_key" type="password" placeholder="••••••••••••" style="flex:1;min-width:0">
+                <button class="calt-ev-btn" id="calt_api_key_toggle" title="Показать/скрыть" style="width:30px;height:30px">👁</button>
               </div>
-              <p class="calt-conn-hint">Использует активный Connection Profile из ST.</p>
+              <div class="calt-field-label">МОДЕЛЬ</div>
+              <div style="display:flex;gap:4px;align-items:center;margin-bottom:6px">
+                <input class="calt-einput" id="calt_api_model" placeholder="models/gemini-flash-lite-latest" style="flex:1;min-width:0">
+                <button class="calt-ev-btn" id="calt_api_fetch_models" title="Загрузить модели" style="width:30px;height:30px">📋</button>
+              </div>
+              <div class="calt-api-status" id="calt_api_models_status" style="font-size:10px;min-height:14px;margin-bottom:4px"></div>
               <button class="menu_button calt-test-btn" id="calt_test_btn">⚡ Тест</button>
               <div class="calt-api-status" id="calt_test_status"></div>
             </div>
@@ -1056,6 +1173,42 @@
     });
     $('#calt_enabled').on('change', function() { getSettings().enabled = this.checked; save(); updatePrompt(); });
     $('#calt_autoscan').on('change', function() { getSettings().autoScan = this.checked; save(); });
+    $('#calt_autoscan_threshold').on('change', function() {
+      const v = Math.max(1, +this.value || 3);
+      this.value = v; getSettings().autoScanThreshold = v; save();
+    });
+    // Custom API fields
+    const _saveApi = () => {
+      const s = getSettings();
+      s.customApiEndpoint = $('#calt_api_endpoint').val().trim();
+      s.customApiKey = $('#calt_api_key').val().trim();
+      s.customApiModel = $('#calt_api_model').val().trim();
+      save();
+    };
+    $('#calt_api_endpoint,#calt_api_key,#calt_api_model').on('change', _saveApi);
+    $('#calt_api_key_toggle').on('click', () => {
+      const $k = $('#calt_api_key');
+      $k.attr('type', $k.attr('type') === 'password' ? 'text' : 'password');
+    });
+    $('#calt_api_fetch_models').on('click', async () => {
+      _saveApi();
+      const $st = $('#calt_api_models_status');
+      $st.css('color','#7a8499').text('Загружаю модели…');
+      try {
+        const models = await _fetchModels();
+        if (!models.length) { $st.css('color','#f59e0b').text('Моделей не найдено'); return; }
+        // Show as select replacing the input
+        const $inp = $('#calt_api_model');
+        const curVal = $inp.val().trim();
+        const sel = $('<select class="calt-einput" id="calt_api_model" style="flex:1;min-width:0">' +
+          models.map(m => '<option value="' + esc(m) + '"' + (m === curVal ? ' selected' : '') + '>' + esc(m) + '</option>').join('') +
+          '</select>');
+        $inp.replaceWith(sel);
+        sel.on('change', _saveApi);
+        if (!curVal && models.length) { sel.val(models[0]); _saveApi(); }
+        $st.css('color','#34d399').text('✅ ' + models.length + ' моделей');
+      } catch(e) { $st.css('color','#f87171').text('✗ ' + e.message); }
+    });
     let _dt = {};
     const deb = (k, fn) => { clearTimeout(_dt[k]); _dt[k] = setTimeout(fn, 400); };
     $('#calt_depth_rules').on('input', function() {
@@ -1158,12 +1311,14 @@
     const s = getSettings(), name = getActiveProfileName();
     $('#calt_enabled').prop('checked', s.enabled !== false);
     $('#calt_autoscan').prop('checked', !!s.autoScan);
+    $('#calt_autoscan_threshold').val(s.autoScanThreshold || 3);
     $('#calt_depth_rules').val(s.depthRules||0); $('#calt_depth_rules_val').text(s.depthRules||0);
     $('#calt_depth_deadlines').val(s.depthDeadlines||1); $('#calt_depth_deadlines_val').text(s.depthDeadlines||1);
     $('#calt_depth_timeline').val(s.depthTimeline||4); $('#calt_depth_timeline_val').text(s.depthTimeline||4);
     $('#calt_dl_horizon').val(s.deadlineHorizon||7);
-    $('#calt_conn_label').text(name || 'Активный профиль ST');
-    $('#calt_conn_dot').css('color', name ? '#34d399' : '#fbbf24');
+    $('#calt_api_endpoint').val(s.customApiEndpoint || '');
+    $('#calt_api_key').val(s.customApiKey || '');
+    $('#calt_api_model').val(s.customApiModel || '');
     renderDate3('#calt_date3_panel','calt_p_day','calt_p_month','calt_p_year',
       s.currentDay, s.currentMonthName, s.currentYear);
     bindPanelDate3();
@@ -1452,6 +1607,9 @@
       + '<input type="number" class="calt-depth-inp" id="calt_scan_ev_depth" value="' + s.scanDepth + '" min="5" max="200">'
       + '<span class="calt-scan-unit">сообщений</span>'
       + '<button class="menu_button calt-scan-btn" id="calt_scan_ev_btn">✦ Сканировать</button>'
+      + '</div>'
+      + '<div class="calt-scan-row">'
+      + '<button class="menu_button calt-scan-btn" id="calt_condense_btn" title="AI конденсация: объединяет дубли и сжимает записи">⚡ Конденсация</button>'
       + '</div>'
       + '<div class="calt-scan-status" id="calt_scan_ev_status"></div>';
   }
@@ -1919,7 +2077,82 @@
       $btn.prop('disabled',false).text('✦ Сканировать');
     });
 
-    // ── Scan deadlines ────────────────────────────────────────────────────
+    // ── Condense events (AI) ──────────────────────────────────────────
+    $('#calt_condense_btn').off('click').on('click', async function() {
+      const $btn = $(this), $st = $('#calt_scan_ev_status');
+      const s = getSettings();
+      if (!s.keyEvents.length) { $st.css('color','#f59e0b').text('Нет событий для конденсации'); return; }
+      const snap = JSON.stringify(s.keyEvents);
+      $btn.prop('disabled',true).text('⚡ Конденсирую…');
+      $st.css('color','#7a8499').text('AI сжимает таймлайн…');
+      try {
+        const input = s.keyEvents.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
+        const condensed = await aiGenerate(
+          'TIMELINE (' + s.keyEvents.length + ' entries):\n' + input + '\n\nCondense this timeline:',
+          'You condense a roleplay timeline into fewer entries.\n\n' +
+            'RULES:\n' +
+            '- MERGE events on the same date into ONE line using → separator\n' +
+            '- MERGE consecutive quiet days: [Days 5-8] quiet period, training\n' +
+            '- KEEP all plot-critical facts: deaths, pacts, injuries, arrivals, departures\n' +
+            '- DROP trivial details: outfit changes, casual dialogue, minor movements\n' +
+            '- MAX 20 words per line. Telegraphic style.\n' +
+            '- Output ONLY the condensed timeline, one [DATE] line per entry\n\n' +
+            'EXAMPLE INPUT:\n' +
+            '[3 Ossian] Selena goes to Great Hall\n' +
+            '[3 Ossian] Verbal attack on Daron student\n' +
+            '[3 Ossian] Etheric burns on hands\n' +
+            '[3 Ossian] Moved to infirmary\n\n' +
+            'EXAMPLE OUTPUT:\n' +
+            '[3 Ossian] Great Hall → verbal attack on Daron student → etheric burns → infirmary'
+        );
+        let parsed = parseEventList(condensed, s.nextEventId);
+        parsed = _mergeSameDate(parsed);
+        if (parsed.length && parsed.length < s.keyEvents.length * 1.5) {
+          _restoreMetadata(parsed, s.keyEvents);
+          // Show preview in overlay before applying
+          _showCondensePreview(parsed, snap, $st);
+        } else {
+          $st.css('color','#f59e0b').text('Конденсация не уменьшила список (' + parsed.length + ' → было ' + s.keyEvents.length + ')');
+        }
+      } catch(e) { $st.css('color','#f87171').text('✗ ' + e.message); }
+      $btn.prop('disabled',false).text('⚡ Конденсация');
+    });
+
+    function _showCondensePreview(parsed, snap, $st) {
+      const s = getSettings();
+      const oldCount = s.keyEvents.length, newCount = parsed.length;
+      const previewText = parsed.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
+      $('.calt-edit-overlay').remove();
+      $('body').append(
+        '<div class="calt-edit-overlay calt-eopen"><div class="calt-edit-box">'
+        + '<div class="calt-edit-hdr"><span>⚡ Конденсация: ' + oldCount + ' → ' + newCount + '</span><button class="calt-edit-x" id="calt_cond_x">✕</button></div>'
+        + '<div class="calt-edit-body">'
+        + '<textarea class="calt-etextarea" id="calt_cond_preview" rows="12" style="font-size:11px;line-height:1.4" readonly>' + esc(previewText) + '</textarea>'
+        + '</div>'
+        + '<div class="calt-edit-footer">'
+        + '<button class="menu_button" id="calt_cond_cancel">Отмена</button>'
+        + '<button class="menu_button calt-save-btn" id="calt_cond_apply">✅ Применить</button>'
+        + '</div></div></div>'
+      );
+      $('#calt_cond_x,#calt_cond_cancel').on('click', () => {
+        $('.calt-edit-overlay').remove();
+        $st.css('color','#4a5568').text('Отменено');
+      });
+      $('#calt_cond_apply').on('click', () => {
+        s.keyEvents = parsed;
+        s.nextEventId = Math.max(0, ...parsed.map(e => e.id||0)) + 1;
+        save(); updatePrompt(); updateMeta(); renderTabContent();
+        $('.calt-edit-overlay').remove();
+        $st.css('color','#34d399').text('✅ Сжато: ' + oldCount + ' → ' + newCount);
+        toast('Таймлайн сжат: ' + oldCount + ' → ' + newCount, '#a78bfa', () => {
+          s.keyEvents = JSON.parse(snap);
+          s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
+          save(); updatePrompt(); updateMeta(); renderTabContent();
+        });
+      });
+    }
+
+    // ── Scan deadlines ────────────────────────────────────────────────
     $('#calt_scan_dl_btn').off('click').on('click', async function() {
       const $btn=$(this), $st=$('#calt_scan_dl_status'), depth=+$('#calt_scan_dl_depth').val()||20;
       $btn.prop('disabled',true).text('Сканирую…'); $st.css('color','#7a8499').text('Анализирую…');
@@ -2210,6 +2443,8 @@
       manualHotMonths:s.manualHotMonths, manualColdMonths:s.manualColdMonths,
       depthRules:s.depthRules, depthDeadlines:s.depthDeadlines, depthTimeline:s.depthTimeline,
       deadlineHorizon:s.deadlineHorizon,
+      autoScanThreshold:s.autoScanThreshold,
+      customApiEndpoint:s.customApiEndpoint, customApiModel:s.customApiModel,
     }, null, 2)], {type:'application/json'});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -2247,6 +2482,9 @@
           if (data.depthDeadlines !== undefined) s.depthDeadlines = data.depthDeadlines;
           if (data.depthTimeline !== undefined)  s.depthTimeline  = data.depthTimeline;
           if (data.deadlineHorizon !== undefined) s.deadlineHorizon = data.deadlineHorizon;
+          if (data.autoScanThreshold !== undefined) s.autoScanThreshold = data.autoScanThreshold;
+          if (data.customApiEndpoint !== undefined) s.customApiEndpoint = data.customApiEndpoint;
+          if (data.customApiModel !== undefined) s.customApiModel = data.customApiModel;
           // Recalculate safe nextIds (prevents NaN and duplicate IDs)
           s.nextEventId    = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
           s.nextDeadlineId = Math.max(0, ...s.deadlines.map(e => e.id||0)) + 1;
@@ -2266,8 +2504,8 @@
     const s = getSettings();
     if (!s.autoScan || !s.enabled) return;
     const chat = ctx().chat || [];
-    // Threshold: 3 new messages (was 10 — too high for short sessions)
-    if (chat.length <= _lastAutoLen || (chat.length - _lastAutoLen) < 3) return;
+    const threshold = s.autoScanThreshold || 3;
+    if (chat.length <= _lastAutoLen || (chat.length - _lastAutoLen) < threshold) return;
     _lastAutoLen = chat.length;
     clearTimeout(_autoScanTimer);
     _autoScanTimer = setTimeout(async () => {
@@ -2347,7 +2585,7 @@
   jQuery(() => {
     try {
       wireEvents();
-      console.log('[Calendar Tracker v5.0] ✦ loaded');
+      console.log('[Calendar Tracker v5.1] ✦ loaded');
     } catch(e) { console.error('[Calendar Tracker] init failed:', e); }
   });
 
