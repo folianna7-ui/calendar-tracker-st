@@ -81,8 +81,8 @@
     let day = '', month = '', year = '';
     for (const p of parts) {
       if (/^\d+$/.test(p)) { if (!day) day = p; else year = p; }
-      // Handle day ranges like "9-13" — use the start day for sorting/math
-      else if (/^\d+-\d+$/.test(p)) { if (!day) day = p.split('-')[0]; else year = p; }
+      // Handle day ranges like "9-13" — preserve the full range string; parseInt("9-13") = 9 for math
+      else if (/^\d+-\d+$/.test(p)) { if (!day) day = p; else year = p; }
       else month = p;
     }
     return { day, month, year };
@@ -972,6 +972,82 @@
     return order;
   }
 
+  // ─── Per-month AI condensation ────────────────────────────────────────────
+  async function condenseMonthEvents(month, $btn) {
+    const s = getSettings();
+    const monthEvents = s.keyEvents.filter(e => extractMonth(e.date) === month);
+    if (monthEvents.length < 2) {
+      toast('Нужно минимум 2 записи для конденсации', '#f59e0b'); return;
+    }
+    const snap = JSON.stringify(s.keyEvents);
+    $btn.prop('disabled', true).text('…');
+    try {
+      const input = monthEvents.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
+      const condensed = await aiGenerate(
+        'TIMELINE OF ' + month + ' (' + monthEvents.length + ' entries):\n' + input + '\n\nCondense this timeline:',
+        'You condense a roleplay timeline into fewer entries.\n\n' +
+          'RULES:\n' +
+          '- MERGE events on the same date into ONE line using → separator\n' +
+          '- MERGE consecutive quiet periods: "[Days 5-8 ' + month + '] quiet period, training"\n' +
+          '- KEEP all plot-critical facts: deaths, pacts, injuries, arrivals, departures\n' +
+          '- DROP trivial details: outfit changes, casual dialogue, minor movements\n' +
+          '- MAX 20 words per line. Telegraphic style.\n' +
+          '- Output ONLY the condensed timeline, one [DATE] line per entry.\n' +
+          '- ALL dates must include the month name "' + month + '".\n\n' +
+          'EXAMPLE INPUT:\n' +
+          '[3 ' + month + '] Goes to Great Hall\n' +
+          '[3 ' + month + '] Verbal attack on student\n' +
+          '[3 ' + month + '] Burns on hands\n' +
+          '[3 ' + month + '] Moved to infirmary\n\n' +
+          'EXAMPLE OUTPUT:\n' +
+          '[3 ' + month + '] Great Hall → verbal attack → burns on hands → infirmary'
+      );
+      let parsed = parseEventList(condensed, s.nextEventId);
+      parsed = _mergeSameDate(parsed);
+      if (!parsed.length || parsed.length >= monthEvents.length) {
+        toast('Конденсация не дала результата (' + (parsed.length||0) + ' → было ' + monthEvents.length + ')', '#f59e0b'); return;
+      }
+      _restoreMetadata(parsed, monthEvents);
+      const oldCount = monthEvents.length, newCount = parsed.length;
+      const previewText = parsed.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
+      $('.calt-edit-overlay').remove();
+      $('body').append(
+        '<div class="calt-edit-overlay calt-eopen"><div class="calt-edit-box">'
+        + '<div class="calt-edit-hdr"><span>⚡ ' + esc(month) + ': ' + oldCount + ' → ' + newCount + '</span><button class="calt-edit-x" id="calt_cond_x">✕</button></div>'
+        + '<div class="calt-edit-body">'
+        + '<div class="calt-elabel" style="margin-bottom:6px">Предпросмотр — проверьте перед применением</div>'
+        + '<textarea class="calt-etextarea" id="calt_cond_preview" rows="10" style="font-size:11px;line-height:1.4" readonly>' + esc(previewText) + '</textarea>'
+        + '</div>'
+        + '<div class="calt-edit-footer">'
+        + '<button class="menu_button" id="calt_cond_cancel">Отмена</button>'
+        + '<button class="menu_button calt-save-btn" id="calt_cond_apply">✅ Применить</button>'
+        + '</div></div></div>'
+      );
+      $('#calt_cond_x,#calt_cond_cancel').on('click', () => $('.calt-edit-overlay').remove());
+      $('#calt_cond_apply').on('click', () => {
+        // Assign IDs to new entries that didn't match existing
+        parsed.forEach(e => { if (!e.id) e.id = s.nextEventId++; });
+        // Replace only this month's events, keep all others
+        s.keyEvents = [
+          ...s.keyEvents.filter(e => extractMonth(e.date) !== month),
+          ...parsed,
+        ];
+        s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
+        save(); updatePrompt(); updateMeta(); renderTabContent();
+        $('.calt-edit-overlay').remove();
+        toast('⚡ ' + month + ': ' + oldCount + ' → ' + newCount, '#a78bfa', () => {
+          s.keyEvents = JSON.parse(snap);
+          s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
+          save(); updatePrompt(); updateMeta(); renderTabContent();
+        });
+      });
+    } catch(e) {
+      toast('Ошибка конденсации: ' + e.message, '#f87171');
+    } finally {
+      $btn.prop('disabled', false).text('⚡');
+    }
+  }
+
   async function scanDeadlines(depth) {
     const s = getSettings();
     const existing = s.deadlines.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
@@ -1370,7 +1446,7 @@
       ? '<select class="calt-date3-month" id="' + idMonth + '">' + monthOpts + '</select>'
       : '<input class="calt-date3-month" id="' + idMonth + '" value="' + esc(valMonth||'') + '" placeholder="Месяц">';
     $(container).html(
-      '<input class="calt-date3-day" id="' + idDay + '" type="number" min="1" max="99" value="' + esc(valDay||'') + '" placeholder="Д">' +
+      '<input class="calt-date3-day" id="' + idDay + '" type="text" inputmode="numeric" value="' + esc(valDay||'') + '" placeholder="Д">' +
       monthInp +
       '<input class="calt-date3-year" id="' + idYear + '" type="number" min="1" value="' + esc(valYear||'') + '" placeholder="Год">'
     );
@@ -1634,6 +1710,7 @@
             ? '<span class="calt-layer-badge calt-layer-hot calt-layer-toggle" data-month="' + esc(month) + '" title="Нажмите — пометить как прошлый">● текущий</span>'
             : '<span class="calt-layer-badge calt-layer-warm calt-layer-toggle" data-month="' + esc(month) + '" title="Нажмите — пометить как текущий">● прошлый</span>')
           + '<span class="calt-month-count">' + groups[month].length + '</span>'
+          + (groups[month].length >= 2 ? '<button class="calt-summ-gen-btn calt-month-cond-btn" data-month="' + esc(month) + '" title="⚡ Конденсировать этот месяц">⚡</button>' : '')
           + (!hot ? '<button class="calt-summ-gen-btn" data-month="' + esc(month) + '" title="AI саммери">✦</button>' : '')
           + '</div>';
         if (!hot) {
@@ -1678,7 +1755,7 @@
       + '<button class="menu_button calt-scan-btn" id="calt_scan_ev_btn">✦ Сканировать</button>'
       + '</div>'
       + '<div class="calt-scan-row">'
-      + '<button class="menu_button calt-scan-btn" id="calt_condense_btn" title="AI конденсация: объединяет дубли и сжимает записи">⚡ Конденсация</button>'
+      + '<button class="menu_button calt-scan-btn" id="calt_condense_btn" title="AI конденсация ВСЕГО таймлайна: объединяет дубли и сжимает все записи">⚡ Конденсировать всё</button>'
       + '</div>'
       + '<div class="calt-scan-status" id="calt_scan_ev_status"></div>';
   }
@@ -2189,6 +2266,13 @@
         }
       } catch(e) { $st.css('color','#f87171').text('✗ ' + e.message); }
       $btn.prop('disabled',false).text('⚡ Конденсация');
+    });
+
+    // ── Per-month condense ────────────────────────────────────────────────
+    $('.calt-month-cond-btn').off('click').on('click', async function(e) {
+      e.stopPropagation();
+      const month = $(this).data('month'), $btn = $(this);
+      await condenseMonthEvents(month, $btn);
     });
 
     function _showCondensePreview(parsed, snap, $st) {
