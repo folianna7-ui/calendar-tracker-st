@@ -374,9 +374,8 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 /* ── Body scroll lock (when overlay is open) ────────────────── */
 body.calt-body-locked {
   overflow: hidden;
-  /* iOS Safari: prevent rubber-band scroll on the body behind the overlay */
-  position: fixed;
-  width: 100%;
+  /* NOTE: intentionally no position:fixed here — it resets scroll position
+     and breaks fixed-positioned overlays in SillyTavern's layout */
 }
 
 /* ── Overlays (summary/edit) ────────────────────────────────── */
