@@ -28,6 +28,7 @@
   let activeTab          = 'events';
   let _lastAutoLen       = 0;
   let _autoScanTimer     = null;
+  let _autoScanRunning   = false;  // prevents parallel scan runs
   let _draftSaveTimer    = null;
   let _collapsedMonths   = {};
   let _collapsedSections = {};
@@ -200,6 +201,24 @@
     return (y-1)*dpy + dbm + (d-1);
   }
 
+  // For deadline horizon math: use the END of a day range ("5-11" → 11)
+  // so the deadline isn't considered "passed" until the whole range is over.
+  function dateToAbsDayEnd(day, monthName, year) {
+    const cfg = getSettings().calendarConfig;
+    if (!cfg.months.length) return null;
+    // Extract end of range: "5-11" → 11, "5" → 5
+    const dayStr = String(day || '');
+    const rangeMatch = dayStr.match(/^(\d+)-(\d+)$/);
+    const d = rangeMatch ? parseInt(rangeMatch[2], 10) : parseInt(dayStr, 10);
+    const y = parseInt(year, 10);
+    if (isNaN(d) || isNaN(y)) return null;
+    const mi = cfg.months.findIndex(m => m.name.toLowerCase() === String(monthName||'').toLowerCase());
+    if (mi < 0) return null;
+    const dpy = cfg.months.reduce((s, m) => s + (parseInt(m.days,10)||30), 0);
+    const dbm = cfg.months.slice(0,mi).reduce((s, m) => s + (parseInt(m.days,10)||30), 0);
+    return (y-1)*dpy + dbm + (d-1);
+  }
+
   function getCurrentAbsDay() {
     const s = getSettings();
     return dateToAbsDay(s.currentDay, s.currentMonthName, s.currentYear);
@@ -299,12 +318,21 @@
     const p = parseDateString(deadline.date);
     // If deadline has no day or no month, we can't calculate — treat as hot
     if (!p.day || !p.month) return true;
-    // Use current year as fallback if deadline year is missing
-    const dlYear = p.year || s.currentYear;
-    const dlAbs = dateToAbsDay(p.day, p.month, dlYear);
+    // No year: can't calculate reliable distance — always treat as hot.
+    // The UI will show a "год не указан" warning badge on the deadline row.
+    if (!p.year) return true;
+    const dlAbs = dateToAbsDayEnd(p.day, p.month, p.year);
     if (dlAbs === null) return true; // month name not in config — treat as hot
     const diff = dlAbs - curAbs;
     return diff <= horizon; // includes past deadlines and those within horizon
+  }
+
+  // Returns true if the deadline date is missing a year component
+  function _deadlineMissingYear(deadline) {
+    if (!deadline.date) return false;
+    const p = parseDateString(deadline.date);
+    // Has day+month but no year — ambiguous
+    return !!(p.day && p.month && !p.year);
   }
 
   // ─── Draft autosave (sessionStorage) ─────────────────────────────────────
@@ -586,11 +614,11 @@
     const hotDls = s.deadlines.filter(e => isDeadlineHot(e));
     if (!hotDls.length) return '';
     const curAbs = getCurrentAbsDay();
-    // Sort by proximity: closest deadline first
     hotDls.sort((a, b) => {
       const pa = parseDateString(a.date), pb = parseDateString(b.date);
-      const aa = dateToAbsDay(pa.day, pa.month, pa.year || s.currentYear);
-      const ab = dateToAbsDay(pb.day, pb.month, pb.year || s.currentYear);
+      // No year → sort to end (unknown timing)
+      const aa = pa.year ? dateToAbsDay(pa.day, pa.month, pa.year) : null;
+      const ab = pb.year ? dateToAbsDay(pb.day, pb.month, pb.year) : null;
       if (aa !== null && ab !== null) return aa - ab;
       if (aa !== null) return -1;
       if (ab !== null) return  1;
@@ -601,17 +629,22 @@
       const dt = dlTypeByKey(e.dtype);
       const titlePart = e.title ? e.title + ': ' : '';
       const pinTag = e.pinned ? ' [📌]' : '';
-      // Calculate days-until for urgency
+      // Calculate days-until for urgency (use end of range: "5-11" → day 11)
+      // Skip if no year — distance is unknown, don't emit misleading urgency
       let urgency = '';
       if (curAbs !== null) {
         const p = parseDateString(e.date);
-        const dlAbs = dateToAbsDay(p.day, p.month, p.year || s.currentYear);
-        if (dlAbs !== null) {
-          const diff = dlAbs - curAbs;
-          if (diff < 0)      urgency = ' (OVERDUE ' + Math.abs(diff) + 'd)';
-          else if (diff === 0) urgency = ' (TODAY!)';
-          else if (diff <= 3)  urgency = ' (IN ' + diff + ' DAY' + (diff > 1 ? 'S' : '') + '!)';
-          else                 urgency = ' (in ' + diff + ' days)';
+        if (p.year) {
+          const dlAbs = dateToAbsDayEnd(p.day, p.month, p.year);
+          if (dlAbs !== null) {
+            const diff = dlAbs - curAbs;
+            if (diff < 0)      urgency = ' (OVERDUE ' + Math.abs(diff) + 'd)';
+            else if (diff === 0) urgency = ' (TODAY!)';
+            else if (diff <= 3)  urgency = ' (IN ' + diff + ' DAY' + (diff > 1 ? 'S' : '') + '!)';
+            else                 urgency = ' (in ' + diff + ' days)';
+          }
+        } else {
+          urgency = ' (year unknown)';
         }
       }
       lines.push('• ' + dt.promptPrefix + ' ' + (e.date ? '[' + e.date + '] ' : '') + titlePart + e.text + urgency + pinTag);
@@ -858,37 +891,77 @@
   }
 
   function _restoreMetadata(parsed, oldEvents) {
+    // Index old events for fast lookup
     const byDateText = {}, byText = {};
+    // Group all old events by exact date string (for union-merge)
+    const byDate = {};
     oldEvents.forEach(e => {
       const dtKey = ((e.date||'') + '||' + e.text).toLowerCase();
       byDateText[dtKey] = e;
       const tk = e.text.toLowerCase().trim();
       if (!byText[tk]) byText[tk] = e;
+      const dk = (e.date||'').toLowerCase().trim();
+      if (dk) { if (!byDate[dk]) byDate[dk] = []; byDate[dk].push(e); }
     });
-    // Track which old events have been claimed (to prevent double-matching)
+
+    // Track which old events have been claimed (prevent double-matching)
     const claimed = new Set();
+
     parsed.forEach(e => {
       const dtKey = ((e.date||'') + '||' + e.text).toLowerCase();
       const tKey  = e.text.toLowerCase().trim();
-      let old = byDateText[dtKey] || byText[tKey];
-      // Fuzzy match: if no exact match, try word-overlap similarity ≥ 0.5 on same date
-      if (!old) {
+      const dk    = (e.date||'').toLowerCase().trim();
+
+      // 1. Exact date+text match
+      let exactOld = byDateText[dtKey] || byText[tKey];
+
+      if (exactOld && !claimed.has(exactOld.id)) {
+        e.pinned = exactOld.pinned || false;
+        e.tags   = [...(exactOld.tags || [])];
+        e.id     = exactOld.id;
+        claimed.add(exactOld.id);
+        return;
+      }
+
+      // 2. Condensed entry covering same date: union pinned+tags from ALL originals of that date
+      //    (handles "event1 → event2 → event3" merged lines)
+      const sameDateOriginals = dk ? (byDate[dk] || []).filter(oe => !claimed.has(oe.id)) : [];
+      if (sameDateOriginals.length) {
+        // Check if the condensed text overlaps significantly with ANY original on that date
+        const anyMatch = sameDateOriginals.some(oe => _similarity(e.text, oe.text) >= 0.25);
+        // Also match if the condensed text CONTAINS fragments of originals (→ separator style)
+        const fragMatch = sameDateOriginals.some(oe => {
+          const words = (oe.text||'').toLowerCase().split(/\s+/).filter(w => w.length > 3);
+          return words.length && words.filter(w => e.text.toLowerCase().includes(w)).length >= Math.ceil(words.length * 0.4);
+        });
+        if (anyMatch || fragMatch || sameDateOriginals.length > 0) {
+          // Union: pick pinned=true if ANY original was pinned; merge all tags
+          e.pinned = sameDateOriginals.some(oe => oe.pinned);
+          const tagSet = new Set();
+          sameDateOriginals.forEach(oe => (oe.tags||[]).forEach(t => tagSet.add(t)));
+          e.tags = [...tagSet];
+          // Use the ID of the first original so the entry stays "stable"
+          e.id = sameDateOriginals[0].id;
+          sameDateOriginals.forEach(oe => claimed.add(oe.id));
+          return;
+        }
+      }
+
+      // 3. Fuzzy match: same month, similarity ≥ 0.45
+      {
         let bestSim = 0, bestMatch = null;
         oldEvents.forEach(oe => {
           if (claimed.has(oe.id)) return;
-          const sameDateish = (e.date||'') === (oe.date||'') ||
-            extractMonth(e.date) === extractMonth(oe.date);
-          if (!sameDateish) return;
+          if (extractMonth(e.date) !== extractMonth(oe.date)) return;
           const sim = _similarity(e.text, oe.text);
-          if (sim > bestSim && sim >= 0.5) { bestSim = sim; bestMatch = oe; }
+          if (sim > bestSim && sim >= 0.45) { bestSim = sim; bestMatch = oe; }
         });
-        if (bestMatch) old = bestMatch;
-      }
-      if (old) {
-        e.pinned = old.pinned || false;
-        e.tags   = [...(old.tags || [])];
-        e.id     = old.id; // keep stable ID if same event
-        claimed.add(old.id);
+        if (bestMatch) {
+          e.pinned = bestMatch.pinned || false;
+          e.tags   = [...(bestMatch.tags || [])];
+          e.id     = bestMatch.id;
+          claimed.add(bestMatch.id);
+        }
       }
     });
   }
@@ -1010,8 +1083,8 @@
       _restoreMetadata(parsed, monthEvents);
       const oldCount = monthEvents.length, newCount = parsed.length;
       const previewText = parsed.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
-      $('.calt-edit-overlay').remove();
-      $('body').append(
+      _closeOverlay();
+      _openOverlay(
         '<div class="calt-edit-overlay calt-eopen"><div class="calt-edit-box">'
         + '<div class="calt-edit-hdr"><span>⚡ ' + esc(month) + ': ' + oldCount + ' → ' + newCount + '</span><button class="calt-edit-x" id="calt_cond_x">✕</button></div>'
         + '<div class="calt-edit-body">'
@@ -1023,7 +1096,7 @@
         + '<button class="menu_button calt-save-btn" id="calt_cond_apply">✅ Применить</button>'
         + '</div></div></div>'
       );
-      $('#calt_cond_x,#calt_cond_cancel').on('click', () => $('.calt-edit-overlay').remove());
+      $('#calt_cond_x,#calt_cond_cancel').on('click', () => _closeOverlay());
       $('#calt_cond_apply').on('click', () => {
         // Assign IDs to new entries that didn't match existing
         parsed.forEach(e => { if (!e.id) e.id = s.nextEventId++; });
@@ -1033,8 +1106,10 @@
           ...parsed,
         ];
         s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
+        // Update snap so the "устарело" badge doesn't appear after condensation
+        saveSummarySnap(month);
         save(); updatePrompt(); updateMeta(); renderTabContent();
-        $('.calt-edit-overlay').remove();
+        _closeOverlay();
         toast('⚡ ' + month + ': ' + oldCount + ' → ' + newCount, '#a78bfa', () => {
           s.keyEvents = JSON.parse(snap);
           s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
@@ -1198,6 +1273,19 @@
       );
       return r.trim().toUpperCase().startsWith('Y');
     } catch(e) { return true; }
+  }
+
+  // ─── Overlay helpers (lock body scroll on mobile while open) ────────────
+  function _openOverlay(html) {
+    _closeOverlay();
+    $('body').append(html);
+    // Lock scroll: on mobile the page scrolls underneath fixed overlays without this
+    $('body').addClass('calt-body-locked');
+  }
+
+  function _closeOverlay() {
+    $('.calt-edit-overlay').remove();
+    $('body').removeClass('calt-body-locked');
   }
 
   // ─── Toast ────────────────────────────────────────────────────────────────
@@ -1446,7 +1534,9 @@
       ? '<select class="calt-date3-month" id="' + idMonth + '">' + monthOpts + '</select>'
       : '<input class="calt-date3-month" id="' + idMonth + '" value="' + esc(valMonth||'') + '" placeholder="Месяц">';
     $(container).html(
-      '<input class="calt-date3-day" id="' + idDay + '" type="text" inputmode="numeric" value="' + esc(valDay||'') + '" placeholder="Д">' +
+      '<input class="calt-date3-day" id="' + idDay + '" type="text" inputmode="numeric"' +
+      ' pattern="[0-9]+(\\-[0-9]+)?" autocomplete="off"' +
+      ' value="' + esc(valDay||'') + '" placeholder="Д">' +
       monthInp +
       '<input class="calt-date3-year" id="' + idYear + '" type="number" min="1" value="' + esc(valYear||'') + '" placeholder="Год">'
     );
@@ -1786,7 +1876,10 @@
         if (curAbs === null) return null;
         const p = parseDateString(e.date);
         if (!p.day || !p.month) return null;
-        const dlAbs = dateToAbsDay(p.day, p.month, p.year || s.currentYear);
+        // No year → can't compute reliable distance; return null so UI shows the warning badge
+        if (!p.year) return null;
+        // Use end of day range ("5-11" → 11) so deadline stays active through the whole range
+        const dlAbs = dateToAbsDayEnd(p.day, p.month, p.year);
         return dlAbs !== null ? dlAbs - curAbs : null;
       }
       // Group by month
@@ -1818,15 +1911,24 @@
           const hot = isDeadlineHot(e);
           const dt = dlTypeByKey(e.dtype);
           const daysUntil = dlDaysUntil(e);
+          const noYear = _deadlineMissingYear(e);
           const approaching = daysUntil !== null && daysUntil >= 0 && daysUntil <= 3;
           const dateBadge = e.date
-            ? '<span class="calt-ev-date' + (approaching ? ' calt-ev-date-urgent' : '') + '">' + (approaching?'⚠ ':'') + esc(e.date) + '</span>'
+            ? '<span class="calt-ev-date' + (approaching ? ' calt-ev-date-urgent' : (noYear ? ' calt-ev-date-noyear' : '')) + '">'
+              + (approaching ? '⚠ ' : '') + esc(e.date) + '</span>'
             : '<span class="calt-ev-date calt-ev-date-empty">—</span>';
           const typeBadge = '<span class="calt-dl-type-badge" style="border-color:' + dt.color + ';color:' + dt.color + '">' + dt.label + '</span>';
+          // "Год не указан" warning — shown when date has day+month but no year
+          const noYearBadge = noYear
+            ? '<span class="calt-dl-noyear-badge" title="Год не указан — дедлайн всегда в контексте. Откройте редактирование и добавьте год.">⚠ год не указан</span>'
+            : '';
           // Compute reason for hot/cold status
           let hotBadge;
           if (e.pinned) {
             hotBadge = '<span class="calt-dl-hot-badge">📌 в контексте</span>';
+          } else if (noYear) {
+            // Year unknown — always hot, but we show the warning instead of a distance
+            hotBadge = '<span class="calt-dl-hot-badge" style="color:#f59e0b">● в контексте (год?)</span>';
           } else if (hot) {
             if (daysUntil !== null) {
               if (daysUntil < 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● просрочен (' + Math.abs(daysUntil) + 'дн)</span>';
@@ -1849,7 +1951,7 @@
             + '<div class="calt-ev-content">'
             + (titleHtml ? titleHtml : '')
             + '<span class="calt-ev-text" data-id="' + e.id + '" data-type="deadline">' + esc(e.text) + '</span>'
-            + '<div class="calt-dl-meta">' + typeBadge + hotBadge + '</div>'
+            + '<div class="calt-dl-meta">' + typeBadge + hotBadge + noYearBadge + '</div>'
             + '</div></div>'
             + '<div class="calt-ev-acts">'
             + '<button class="calt-ev-btn calt-dl-type-btn" data-id="' + e.id + '" title="Тип">🏷</button>'
@@ -2232,6 +2334,22 @@
       const $btn = $(this), $st = $('#calt_scan_ev_status');
       const s = getSettings();
       if (!s.keyEvents.length) { $st.css('color','#f59e0b').text('Нет событий для конденсации'); return; }
+
+      // Safety gate: >80 events risks overflowing model context in a single call.
+      // Redirect user to per-month buttons which send smaller chunks.
+      const CHUNK_LIMIT = 80;
+      if (s.keyEvents.length > CHUNK_LIMIT) {
+        const months = [...new Set(s.keyEvents.map(e => extractMonth(e.date)).filter(Boolean))];
+        $st.css('color','#f59e0b').html(
+          '⚠ ' + s.keyEvents.length + ' событий — слишком много для одного запроса.<br>' +
+          'Используйте кнопки <b>⚡</b> рядом с каждым месяцем — по одному за раз.'
+        );
+        // Expand all month groups so the ⚡ buttons are visible
+        _collapsedMonths = {};
+        renderTabContent();
+        return;
+      }
+
       const snap = JSON.stringify(s.keyEvents);
       $btn.prop('disabled',true).text('⚡ Конденсирую…');
       $st.css('color','#7a8499').text('AI сжимает таймлайн…');
@@ -2265,7 +2383,7 @@
           $st.css('color','#f59e0b').text('Конденсация не уменьшила список (' + parsed.length + ' → было ' + s.keyEvents.length + ')');
         }
       } catch(e) { $st.css('color','#f87171').text('✗ ' + e.message); }
-      $btn.prop('disabled',false).text('⚡ Конденсация');
+      $btn.prop('disabled',false).text('⚡ Конденсировать всё');
     });
 
     // ── Per-month condense ────────────────────────────────────────────────
@@ -2279,8 +2397,8 @@
       const s = getSettings();
       const oldCount = s.keyEvents.length, newCount = parsed.length;
       const previewText = parsed.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
-      $('.calt-edit-overlay').remove();
-      $('body').append(
+      _closeOverlay();
+      _openOverlay(
         '<div class="calt-edit-overlay calt-eopen"><div class="calt-edit-box">'
         + '<div class="calt-edit-hdr"><span>⚡ Конденсация: ' + oldCount + ' → ' + newCount + '</span><button class="calt-edit-x" id="calt_cond_x">✕</button></div>'
         + '<div class="calt-edit-body">'
@@ -2292,14 +2410,18 @@
         + '</div></div></div>'
       );
       $('#calt_cond_x,#calt_cond_cancel').on('click', () => {
-        $('.calt-edit-overlay').remove();
+        _closeOverlay();
         $st.css('color','#4a5568').text('Отменено');
       });
       $('#calt_cond_apply').on('click', () => {
         s.keyEvents = parsed;
         s.nextEventId = Math.max(0, ...parsed.map(e => e.id||0)) + 1;
+        // Refresh summary snaps for all months that appear in the condensed result
+        // so "устарело" badges don't show up immediately after applying
+        const affectedMonths = new Set(parsed.map(e => extractMonth(e.date)).filter(Boolean));
+        affectedMonths.forEach(m => saveSummarySnap(m));
         save(); updatePrompt(); updateMeta(); renderTabContent();
-        $('.calt-edit-overlay').remove();
+        _closeOverlay();
         $st.css('color','#34d399').text('✅ Сжато: ' + oldCount + ' → ' + newCount);
         toast('Таймлайн сжат: ' + oldCount + ' → ' + newCount, '#a78bfa', () => {
           s.keyEvents = JSON.parse(snap);
@@ -2522,8 +2644,8 @@
   // ─── Summary edit overlay ─────────────────────────────────────────────────
   function openSummaryEdit(month) {
     const curr = getSettings().monthSummaries[month] || '';
-    $('.calt-edit-overlay').remove();
-    $('body').append(
+    _closeOverlay();
+    _openOverlay(
       '<div class="calt-edit-overlay calt-eopen"><div class="calt-edit-box">'
       + '<div class="calt-edit-hdr"><span>📝 Саммери — ' + esc(month) + '</span><button class="calt-edit-x" id="calt_summ_x">✕</button></div>'
       + '<div class="calt-edit-body">'
@@ -2536,12 +2658,12 @@
       + '<button class="menu_button calt-save-btn" id="calt_summ_save">💾 Сохранить</button>'
       + '</div></div></div>'
     );
-    $('#calt_summ_x,#calt_summ_cancel').on('click', () => $('.calt-edit-overlay').remove());
+    $('#calt_summ_x,#calt_summ_cancel').on('click', () => _closeOverlay());
     $('#calt_summ_save').on('click', async () => {
       getSettings().monthSummaries[month] = $('#calt_summ_text').val().trim();
       saveSummarySnap(month);
       save(); await updatePrompt(); renderTabContent();
-      $('.calt-edit-overlay').remove(); toast('Саммери сохранено', '#a78bfa');
+      _closeOverlay(); toast('Саммери сохранено', '#a78bfa');
     });
   }
 
@@ -2554,8 +2676,8 @@
       ? '<div class="calt-elabel" style="margin-top:8px">Название (опционально)</div>'
         + '<input class="calt-einput" id="calt_edit_title" value="' + esc(item.title||'') + '" placeholder="Краткое название">'
       : '';
-    $('.calt-edit-overlay').remove();
-    $('body').append(
+    _closeOverlay();
+    _openOverlay(
       '<div class="calt-edit-overlay calt-eopen"><div class="calt-edit-box">'
       + '<div class="calt-edit-hdr"><span>' + (type==='event'?'⚔ Редактировать событие':'⏳ Редактировать дедлайн') + '</span><button class="calt-edit-x" id="calt_edit_x">✕</button></div>'
       + '<div class="calt-edit-body">'
@@ -2574,7 +2696,7 @@
     const dp = parseDateString(item.date || '');
     renderDate3('#calt_edit_date3', 'calt_edit_day', 'calt_edit_month', 'calt_edit_year', dp.day, dp.month, dp.year);
 
-    $('#calt_edit_x,#calt_edit_cancel').on('click', () => $('.calt-edit-overlay').remove());
+    $('#calt_edit_x,#calt_edit_cancel').on('click', () => _closeOverlay());
     $('#calt_edit_save').on('click', () => {
       const ed = $('#calt_edit_day').val().trim();
       const em = $('#calt_edit_month').val().trim();
@@ -2585,7 +2707,7 @@
       item.date = d; item.text = t;
       if (isDl) item.title = ($('#calt_edit_title').val() || '').trim();
       save(); updatePrompt(); updateMeta(); renderTabContent();
-      $('.calt-edit-overlay').remove(); toast('Сохранено', '#34d399');
+      _closeOverlay(); toast('Сохранено', '#34d399');
     });
     $('#calt_edit_text').on('keydown', e => { if (e.key==='Enter' && e.ctrlKey) $('#calt_edit_save').click(); });
   }
@@ -2662,12 +2784,18 @@
   async function tryAutoScan() {
     const s = getSettings();
     if (!s.autoScan || !s.enabled) return;
+    if (_autoScanRunning) return; // already in progress — skip, don't queue another
     const chat = ctx().chat || [];
     const threshold = s.autoScanThreshold || 3;
     if (chat.length <= _lastAutoLen || (chat.length - _lastAutoLen) < threshold) return;
-    _lastAutoLen = chat.length;
+    // Snapshot the length now — if more messages arrive while we're scanning, we'll
+    // see them on the next call after this one finishes.
+    const lenSnapshot = chat.length;
     clearTimeout(_autoScanTimer);
     _autoScanTimer = setTimeout(async () => {
+      if (_autoScanRunning) return; // double-check inside the timeout
+      _autoScanRunning = true;
+      _lastAutoLen = lenSnapshot;
       try {
         const lastMsg = chat[chat.length - 1];
         const sig = await isMessageSignificant(lastMsg ? (lastMsg.mes||'') : '');
@@ -2700,6 +2828,7 @@
           });
         }
       } catch(e) { console.warn('[CalTracker] autoscan error:', e.message); }
+      finally    { _autoScanRunning = false; }
     }, 2000);
   }
 
@@ -2743,6 +2872,19 @@
   jQuery(() => {
     try {
       wireEvents();
+      // Sanitize day inputs: allow digits and a single dash (for ranges like "5-11")
+      $(document).on('input.calt_day', '.calt-date3-day', function() {
+        const raw = this.value;
+        // Remove anything that isn't a digit or hyphen; collapse multiple hyphens
+        let clean = raw.replace(/[^\d-]/g, '').replace(/-{2,}/g, '-');
+        // Don't allow leading hyphen
+        if (clean.startsWith('-')) clean = clean.slice(1);
+        if (clean !== raw) {
+          const pos = this.selectionStart - (raw.length - clean.length);
+          this.value = clean;
+          try { this.setSelectionRange(pos, pos); } catch(e) {}
+        }
+      });
       console.log('[Calendar Tracker v5.1] ✦ loaded');
     } catch(e) { console.error('[Calendar Tracker] init failed:', e); }
   });

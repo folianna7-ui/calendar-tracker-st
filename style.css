@@ -371,6 +371,14 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-rules-actions { display:flex; gap:8px; padding:10px 0 4px; flex-wrap:wrap; }
 .calt-rules-save-btn { background:#fbbf24 !important; color:#1a1f2e !important; border-color:#fbbf24 !important; font-weight:700 !important; }
 
+/* ── Body scroll lock (when overlay is open) ────────────────── */
+body.calt-body-locked {
+  overflow: hidden;
+  /* iOS Safari: prevent rubber-band scroll on the body behind the overlay */
+  position: fixed;
+  width: 100%;
+}
+
 /* ── Overlays (summary/edit) ────────────────────────────────── */
 .calt-edit-overlay {
   display:none; position:fixed; top:0; right:0; bottom:0; left:0;
@@ -520,6 +528,19 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-dl-type-badge {
   font-size:9px; font-weight:700; border:1px solid; border-radius:4px;
   padding:1px 5px; white-space:nowrap; flex-shrink:0;
+}
+/* Date badge variant for deadlines missing a year */
+.calt-ev-date-noyear {
+  color:#f59e0b;
+  background:rgba(245,158,11,0.1);
+  border-color:rgba(245,158,11,0.35);
+}
+/* "⚠ год не указан" inline warning badge */
+.calt-dl-noyear-badge {
+  font-size:9px; font-weight:700; color:#f59e0b;
+  background:rgba(245,158,11,0.1); border:1px solid rgba(245,158,11,0.25);
+  border-radius:4px; padding:1px 5px; white-space:nowrap;
+  cursor:help; flex-shrink:0;
 }
 .calt-dl-meta {
   display:flex; align-items:center; gap:5px; margin-top:2px; flex-wrap:wrap;
