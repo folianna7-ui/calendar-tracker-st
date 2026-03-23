@@ -191,6 +191,23 @@ input[type=number].calt-date3-year::-webkit-inner-spin-button { opacity:0; }
 .calt-summ-outdated { font-size:9px; font-weight:700; color:#f87171; background:rgba(248,113,113,0.1); border-radius:4px; padding:1px 5px; white-space:nowrap; flex-shrink:0; }
 .calt-month-body .calt-ev-row { padding-left:14px; }
 
+/* Event row date column — wraps date badge + ago label vertically */
+.calt-ev-date-col {
+  display:flex; flex-direction:column; align-items:flex-start;
+  gap:2px; flex-shrink:0;
+}
+
+/* "~3 дн назад" / "вчера" / "сегодня" label under the date badge */
+.calt-ev-ago {
+  font-size:9px; font-weight:600; color:#4a5568;
+  white-space:nowrap; padding:0 2px;
+  letter-spacing:0.2px;
+}
+
+/* Highlight "сегодня" and "вчера" more visibly */
+.calt-ev-ago-today { color:#fbbf24 !important; }
+.calt-ev-ago-yesterday { color:#94a3b8 !important; }
+
 /* ── Event row ──────────────────────────────────────────────── */
 .calt-ev-row {
   display:flex; align-items:center; gap:8px; padding:8px 10px;

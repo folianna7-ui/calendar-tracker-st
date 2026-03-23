@@ -286,7 +286,42 @@
     return results;
   }
 
-  // ─── Summary tracking ─────────────────────────────────────────────────────
+  // Returns how many in-world days ago the event/period ended.
+  // Uses dateToAbsDayEnd so "18-29 Эрвэн" returns days since day 29.
+  // Returns null if can't calculate (no calendar config, missing date fields).
+  // Returns negative number if event is in the future.
+  function getEventDaysAgo(dateStr) {
+    if (!dateStr) return null;
+    const curAbs = getCurrentAbsDay();
+    if (curAbs === null) return null;
+    const p = parseDateString(dateStr);
+    if (!p.month) return null;
+    // Need a year — use currentYear as fallback only for events (not deadlines)
+    const year = p.year || getSettings().currentYear;
+    if (!year) return null;
+    const evAbs = dateToAbsDayEnd(p.day || '1', p.month, year);
+    if (evAbs === null) return null;
+    return curAbs - evAbs; // positive = past, 0 = today, negative = future
+  }
+
+  // Human-readable "days ago" label for UI
+  function daysAgoLabel(daysAgo) {
+    if (daysAgo === null) return '';
+    if (daysAgo < 0)  return '';           // future events — no label
+    if (daysAgo === 0) return 'сегодня';
+    if (daysAgo === 1) return 'вчера';
+    if (daysAgo <= 60) return '~' + daysAgo + ' дн назад';
+    return '';  // too far back — covered by month grouping / summaries
+  }
+
+  // Compact label for prompt injection — English, concise
+  function daysAgoPromptTag(daysAgo) {
+    if (daysAgo === null) return '';
+    if (daysAgo < 0)   return ' (in ' + Math.abs(daysAgo) + 'd)';
+    if (daysAgo === 0) return ' (TODAY)';
+    if (daysAgo === 1) return ' (yesterday)';
+    return ' (' + daysAgo + 'd ago)';
+  }
   function isSummaryOutdated(month) {
     const s = getSettings();
     if (!s.monthSummaries[month]) return false;
@@ -563,7 +598,9 @@
         const tagStr = (e.tags && e.tags.length)
           ? ' [' + e.tags.map(k => { const t = tagByKey(k); return t ? t.key.toUpperCase() : ''; }).filter(Boolean).join('/') + ']'
           : '';
-        lines.push('• ' + (e.date ? '[' + e.date + ']' : '') + tagStr + ' ' + e.text + pin);
+        const daysAgo  = getEventDaysAgo(e.date);
+        const agoTag   = daysAgoPromptTag(daysAgo);
+        lines.push('• ' + (e.date ? '[' + e.date + ']' : '') + tagStr + agoTag + ' ' + e.text + pin);
       });
     }
 
@@ -1707,8 +1744,14 @@
   }
 
   function eventRow(e, type) {
+    const daysAgo = getEventDaysAgo(e.date);
+    const agoLbl  = daysAgoLabel(daysAgo);
+    const agoClass = daysAgo === 0 ? ' calt-ev-ago-today'
+                   : daysAgo === 1 ? ' calt-ev-ago-yesterday'
+                   : '';
     const dateBadge = e.date
       ? '<span class="calt-ev-date">' + esc(e.date) + '</span>'
+        + (agoLbl ? '<span class="calt-ev-ago' + agoClass + '">' + esc(agoLbl) + '</span>' : '')
       : '<span class="calt-ev-date calt-ev-date-empty">—</span>';
     const tagsHtml = (e.tags && e.tags.length)
       ? '<div class="calt-ev-tags">' + e.tags.map(k => {
@@ -1718,7 +1761,8 @@
       : '';
     const pinClass = e.pinned ? ' calt-ev-pin-active' : '';
     return '<div class="calt-ev-row" data-id="' + e.id + '" data-type="' + type + '">'
-      + '<div class="calt-ev-left">' + dateBadge
+      + '<div class="calt-ev-left">'
+      + '<div class="calt-ev-date-col">' + dateBadge + '</div>'
       + '<div class="calt-ev-content">'
       + '<span class="calt-ev-text" data-id="' + e.id + '" data-type="' + type + '">' + esc(e.text) + '</span>'
       + tagsHtml + '</div></div>'
