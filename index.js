@@ -166,6 +166,7 @@
     s.keyEvents.forEach(e => {
       if (e.pinned === undefined) e.pinned = false;
       if (!Array.isArray(e.tags)) e.tags = [];
+      if (e.hidden === undefined) e.hidden = false;
     });
     s.deadlines.forEach(e => {
       if (e.pinned === undefined) e.pinned = false;
@@ -579,9 +580,9 @@
     const s = getSettings(), cc = s.calendarConfig, cm = currentMonth();
     const lines = ['[TIMELINE_START]'];
 
-    // HOT layer — sorted chronologically
+    // HOT layer — sorted chronologically, skip hidden events
     const hotEvents = s.keyEvents
-      .filter(e => e.pinned || isMonthHot(extractMonth(e.date) || ''))
+      .filter(e => !e.hidden && (e.pinned || isMonthHot(extractMonth(e.date) || '')))
       .sort((a, b) => {
         const pa = parseDateString(a.date), pb = parseDateString(b.date);
         const aa = dateToAbsDay(pa.day, pa.month, pa.year);
@@ -1082,79 +1083,131 @@
     return order;
   }
 
-  // ─── Per-month AI condensation ────────────────────────────────────────────
-  async function condenseMonthEvents(month, $btn) {
+  // ─── Per-month AI condensation with date picker ───────────────────────────
+  function openCondenseDatePicker(month, $btn) {
     const s = getSettings();
     const monthEvents = s.keyEvents.filter(e => extractMonth(e.date) === month);
     if (monthEvents.length < 2) {
       toast('Нужно минимум 2 записи для конденсации', '#f59e0b'); return;
     }
+
+    // Build unique dates list (preserving day-sort order)
+    const dateGroups = new Map(); // date → [events]
+    monthEvents.forEach(e => {
+      const dk = (e.date || '').trim();
+      if (!dateGroups.has(dk)) dateGroups.set(dk, []);
+      dateGroups.get(dk).push(e);
+    });
+    // Sort dates by start-day numerically
+    const sortedDates = [...dateGroups.keys()].sort((a, b) => {
+      const pa = parseDateString(a), pb = parseDateString(b);
+      return (parseInt(pa.day, 10) || 0) - (parseInt(pb.day, 10) || 0);
+    });
+
+    const dateRows = sortedDates.map((dk, i) => {
+      const evs = dateGroups.get(dk);
+      const preview = evs.map(e => e.text).join(' → ');
+      const short = preview.length > 80 ? preview.slice(0, 77) + '…' : preview;
+      return '<label class="calt-condpick-row">'
+        + '<input type="checkbox" class="calt-condpick-chk" data-date="' + esc(dk) + '" checked>'
+        + '<div class="calt-condpick-info">'
+        + '<span class="calt-condpick-date">' + esc(dk || '—') + '</span>'
+        + '<span class="calt-condpick-preview">' + esc(short) + '</span>'
+        + '</div>'
+        + '</label>';
+    }).join('');
+
+    _openOverlay(
+      '<div class="calt-edit-overlay calt-eopen"><div class="calt-edit-box calt-condpick-box">'
+      + '<div class="calt-edit-hdr">'
+      + '<span>⚡ Конденсация — ' + esc(month) + '</span>'
+      + '<button class="calt-edit-x" id="calt_cpick_x">✕</button>'
+      + '</div>'
+      + '<div class="calt-edit-body">'
+      + '<div class="calt-elabel" style="margin-bottom:8px">Выберите даты для конденсации. Снятые — останутся без изменений.</div>'
+      + '<div class="calt-condpick-actions">'
+      + '<button class="calt-condpick-selall" id="calt_cpick_all">✓ Все</button>'
+      + '<button class="calt-condpick-selall" id="calt_cpick_none">✗ Сбросить</button>'
+      + '</div>'
+      + '<div class="calt-condpick-list">' + dateRows + '</div>'
+      + '</div>'
+      + '<div class="calt-edit-footer">'
+      + '<button class="menu_button" id="calt_cpick_cancel">Отмена</button>'
+      + '<button class="menu_button calt-save-btn" id="calt_cpick_run">⚡ Конденсировать</button>'
+      + '</div>'
+      + '</div></div>'
+    );
+
+    $('#calt_cpick_x,#calt_cpick_cancel').on('click', () => { _closeOverlay(); $btn.prop('disabled',false).text('⚡'); });
+    $('#calt_cpick_all').on('click',  () => $('.calt-condpick-chk').prop('checked', true));
+    $('#calt_cpick_none').on('click', () => $('.calt-condpick-chk').prop('checked', false));
+
+    $('#calt_cpick_run').on('click', async () => {
+      const selectedDates = new Set(
+        $('.calt-condpick-chk:checked').toArray().map(el => $(el).data('date'))
+      );
+      if (!selectedDates.size) { toast('Выберите хотя бы одну дату', '#f59e0b'); return; }
+
+      const toCondense  = monthEvents.filter(e => selectedDates.has((e.date||'').trim()));
+      const toKeep      = monthEvents.filter(e => !selectedDates.has((e.date||'').trim()));
+
+      if (toCondense.length < 2) { toast('Нужно минимум 2 события для конденсации', '#f59e0b'); return; }
+
+      _closeOverlay();
+      $btn.prop('disabled', true).text('…');
+      await condenseSelectedEvents(month, toCondense, toKeep, $btn);
+    });
+  }
+
+  async function condenseSelectedEvents(month, toCondense, toKeep, $btn) {
+    const s = getSettings();
     const snap = JSON.stringify(s.keyEvents);
-    $btn.prop('disabled', true).text('…');
     try {
-      const input = monthEvents.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
+      const input = toCondense.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
       const condensed = await aiGenerate(
-        'TIMELINE OF ' + month + ' (' + monthEvents.length + ' entries):\n' + input + '\n\nCondense this timeline:',
+        'TIMELINE (' + toCondense.length + ' entries from ' + month + '):\n' + input + '\n\nCondense this timeline:',
         'You condense a roleplay timeline into fewer entries.\n\n' +
           'RULES:\n' +
           '- MERGE events on the same date into ONE line using → separator\n' +
-          '- MERGE consecutive quiet periods: "[Days 5-8 ' + month + '] quiet period, training"\n' +
+          '- MERGE consecutive quiet periods: "[Days 5-8 ' + month + '] quiet period"\n' +
           '- KEEP all plot-critical facts: deaths, pacts, injuries, arrivals, departures\n' +
-          '- DROP trivial details: outfit changes, casual dialogue, minor movements\n' +
+          '- DROP trivial details: casual dialogue, minor movements\n' +
           '- MAX 20 words per line. Telegraphic style.\n' +
-          '- Output ONLY the condensed timeline, one [DATE] line per entry.\n' +
+          '- Output ONLY the condensed lines, one [DATE] per entry.\n' +
           '- ALL dates must include the month name "' + month + '".\n\n' +
           'EXAMPLE INPUT:\n' +
-          '[3 ' + month + '] Goes to Great Hall\n' +
-          '[3 ' + month + '] Verbal attack on student\n' +
-          '[3 ' + month + '] Burns on hands\n' +
-          '[3 ' + month + '] Moved to infirmary\n\n' +
+          '[3 ' + month + '] Goes to hall\n[3 ' + month + '] Burns on hands\n\n' +
           'EXAMPLE OUTPUT:\n' +
-          '[3 ' + month + '] Great Hall → verbal attack → burns on hands → infirmary'
+          '[3 ' + month + '] Goes to hall → burns on hands'
       );
       let parsed = parseEventList(condensed, s.nextEventId);
       parsed = _mergeSameDate(parsed);
-      if (!parsed.length || parsed.length >= monthEvents.length) {
-        toast('Конденсация не дала результата (' + (parsed.length||0) + ' → было ' + monthEvents.length + ')', '#f59e0b'); return;
+      if (!parsed.length || parsed.length >= toCondense.length) {
+        toast('Конденсация не дала результата', '#f59e0b');
+        $btn.prop('disabled', false).text('⚡'); return;
       }
-      _restoreMetadata(parsed, monthEvents);
-      const oldCount = monthEvents.length, newCount = parsed.length;
-      const previewText = parsed.map(e => '[' + (e.date||'?') + '] ' + e.text).join('\n');
-      _closeOverlay();
-      _openOverlay(
-        '<div class="calt-edit-overlay calt-eopen"><div class="calt-edit-box">'
-        + '<div class="calt-edit-hdr"><span>⚡ ' + esc(month) + ': ' + oldCount + ' → ' + newCount + '</span><button class="calt-edit-x" id="calt_cond_x">✕</button></div>'
-        + '<div class="calt-edit-body">'
-        + '<div class="calt-elabel" style="margin-bottom:6px">Предпросмотр — проверьте перед применением</div>'
-        + '<textarea class="calt-etextarea" id="calt_cond_preview" rows="10" style="font-size:11px;line-height:1.4" readonly>' + esc(previewText) + '</textarea>'
-        + '</div>'
-        + '<div class="calt-edit-footer">'
-        + '<button class="menu_button" id="calt_cond_cancel">Отмена</button>'
-        + '<button class="menu_button calt-save-btn" id="calt_cond_apply">✅ Применить</button>'
-        + '</div></div></div>'
-      );
-      $('#calt_cond_x,#calt_cond_cancel').on('click', () => _closeOverlay());
-      $('#calt_cond_apply').on('click', () => {
-        // Assign IDs to new entries that didn't match existing
-        parsed.forEach(e => { if (!e.id) e.id = s.nextEventId++; });
-        // Replace only this month's events, keep all others
-        s.keyEvents = [
-          ...s.keyEvents.filter(e => extractMonth(e.date) !== month),
-          ...parsed,
-        ];
+      _restoreMetadata(parsed, toCondense);
+      parsed.forEach(e => { if (!e.id) e.id = s.nextEventId++; });
+
+      const oldTotal = s.keyEvents.length;
+      // Rebuild: other months + kept dates in this month + condensed
+      s.keyEvents = [
+        ...s.keyEvents.filter(e => extractMonth(e.date) !== month),
+        ...toKeep,
+        ...parsed,
+      ];
+      s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
+      saveSummarySnap(month);
+      save(); updatePrompt(); updateMeta(); renderTabContent();
+
+      const newTotal = s.keyEvents.length;
+      toast('⚡ ' + month + ': ' + oldTotal + ' → ' + newTotal, '#a78bfa', () => {
+        s.keyEvents = JSON.parse(snap);
         s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
-        // Update snap so the "устарело" badge doesn't appear after condensation
-        saveSummarySnap(month);
         save(); updatePrompt(); updateMeta(); renderTabContent();
-        _closeOverlay();
-        toast('⚡ ' + month + ': ' + oldCount + ' → ' + newCount, '#a78bfa', () => {
-          s.keyEvents = JSON.parse(snap);
-          s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
-          save(); updatePrompt(); updateMeta(); renderTabContent();
-        });
       });
-    } catch(e) {
-      toast('Ошибка конденсации: ' + e.message, '#f87171');
+    } catch(err) {
+      toast('Ошибка конденсации: ' + err.message, '#f87171');
     } finally {
       $btn.prop('disabled', false).text('⚡');
     }
@@ -1753,20 +1806,27 @@
       ? '<span class="calt-ev-date">' + esc(e.date) + '</span>'
         + (agoLbl ? '<span class="calt-ev-ago' + agoClass + '">' + esc(agoLbl) + '</span>' : '')
       : '<span class="calt-ev-date calt-ev-date-empty">—</span>';
+    const hiddenBadge = e.hidden
+      ? '<span class="calt-ev-hidden-badge">скрыто</span>'
+      : '';
     const tagsHtml = (e.tags && e.tags.length)
       ? '<div class="calt-ev-tags">' + e.tags.map(k => {
           const t = tagByKey(k);
           return t ? '<span class="calt-tag" data-tagkey="' + k + '" style="border-color:' + t.color + ';color:' + t.color + '">' + t.label + '</span>' : '';
         }).join('') + '</div>'
       : '';
-    const pinClass = e.pinned ? ' calt-ev-pin-active' : '';
-    return '<div class="calt-ev-row" data-id="' + e.id + '" data-type="' + type + '">'
+    const pinClass  = e.pinned ? ' calt-ev-pin-active' : '';
+    const hidClass  = e.hidden ? ' calt-ev-hidden-row' : '';
+    const eyeActive = e.hidden ? ' calt-ev-eye-off' : '';
+    const eyeTitle  = e.hidden ? 'Включить в промпт' : 'Скрыть из промпта';
+    return '<div class="calt-ev-row' + hidClass + '" data-id="' + e.id + '" data-type="' + type + '">'
       + '<div class="calt-ev-left">'
-      + '<div class="calt-ev-date-col">' + dateBadge + '</div>'
+      + '<div class="calt-ev-date-col">' + dateBadge + hiddenBadge + '</div>'
       + '<div class="calt-ev-content">'
       + '<span class="calt-ev-text" data-id="' + e.id + '" data-type="' + type + '">' + esc(e.text) + '</span>'
       + tagsHtml + '</div></div>'
       + '<div class="calt-ev-acts">'
+      + '<button class="calt-ev-btn calt-ev-eye' + eyeActive + '" data-id="' + e.id + '" data-type="' + type + '" title="' + eyeTitle + '">👁</button>'
       + '<button class="calt-ev-btn calt-ev-tag-btn" data-id="' + e.id + '" data-type="' + type + '" title="Теги">🏷</button>'
       + '<button class="calt-ev-btn calt-ev-pin' + pinClass + '" data-id="' + e.id + '" data-type="' + type + '" title="' + (e.pinned?'Открепить':'Закрепить') + '">📌</button>'
       + '<button class="calt-ev-btn calt-ev-edit" data-id="' + e.id + '" data-type="' + type + '" title="Редактировать">✎</button>'
@@ -2271,6 +2331,17 @@
       e.stopPropagation(); openTagPicker(+$(this).data('id'), $(this).data('type'), $(this));
     });
 
+    // ── Hide / show (eye toggle) ──────────────────────────────────────────
+    $('.calt-ev-eye').off('click').on('click', function() {
+      const id = +$(this).data('id'), type = $(this).data('type'), s = getSettings();
+      const arr = type === 'event' ? s.keyEvents : s.deadlines;
+      const item = arr.find(e => e.id === id); if (!item) return;
+      item.hidden = !item.hidden;
+      save(); updatePrompt(); renderTabContent();
+      toast(item.hidden ? '👁 Скрыто из промпта' : '👁 Включено в промпт',
+            item.hidden ? '#4a5568' : '#34d399');
+    });
+
     // ── Pin (unified: works for both events and deadlines) ─────────────
     $('.calt-ev-pin').off('click').on('click', function() {
       const id = +$(this).data('id'), type = $(this).data('type'), s = getSettings();
@@ -2430,11 +2501,12 @@
       $btn.prop('disabled',false).text('⚡ Конденсировать всё');
     });
 
-    // ── Per-month condense ────────────────────────────────────────────────
-    $('.calt-month-cond-btn').off('click').on('click', async function(e) {
+    // ── Per-month condense (date picker) ─────────────────────────────────
+    $('.calt-month-cond-btn').off('click').on('click', function(e) {
       e.stopPropagation();
       const month = $(this).data('month'), $btn = $(this);
-      await condenseMonthEvents(month, $btn);
+      $btn.prop('disabled', true);
+      openCondenseDatePicker(month, $btn);
     });
 
     function _showCondensePreview(parsed, snap, $st) {

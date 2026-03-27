@@ -631,3 +631,48 @@ body.calt-body-locked {
   padding:6px 8px;
   margin-bottom:2px;
 }
+
+/* ── Hidden event rows ──────────────────────────────────────── */
+.calt-ev-hidden-row { opacity:0.38; }
+.calt-ev-hidden-row:hover { opacity:0.65; }
+.calt-ev-hidden-badge {
+  font-size:9px; font-weight:700;
+  color:#4a5568; background:rgba(255,255,255,0.05);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:4px; padding:1px 5px;
+  white-space:nowrap; margin-top:2px; display:inline-block;
+}
+.calt-ev-eye-off { color:#4a5568 !important; opacity:0.45; }
+.calt-ev-eye-off:hover { opacity:1 !important; color:#c9d1e0 !important; }
+
+/* ── Condense date-picker overlay ───────────────────────────── */
+.calt-condpick-box { width:min(560px,96vw) !important; }
+.calt-condpick-actions { display:flex; gap:6px; margin-bottom:8px; }
+.calt-condpick-selall {
+  background:rgba(255,255,255,0.05); border:1px solid rgba(255,255,255,0.1);
+  border-radius:5px; color:#94a3b8; font-size:11px; padding:3px 10px;
+  cursor:pointer; font-family:inherit; transition:all 0.15s;
+}
+.calt-condpick-selall:hover { background:rgba(255,255,255,0.1); color:#c9d1e0; }
+.calt-condpick-list {
+  display:flex; flex-direction:column; gap:4px;
+  max-height:340px; overflow-y:auto; -webkit-overflow-scrolling:touch;
+}
+.calt-condpick-row {
+  display:flex; align-items:flex-start; gap:10px;
+  padding:7px 10px; border-radius:6px; cursor:pointer;
+  background:rgba(255,255,255,0.02); border:1px solid rgba(255,255,255,0.04);
+  transition:background 0.12s; user-select:none;
+}
+.calt-condpick-row:hover { background:rgba(255,255,255,0.06); }
+.calt-condpick-row input[type=checkbox] {
+  accent-color:#fbbf24; flex-shrink:0; margin-top:3px;
+  width:14px; height:14px; cursor:pointer;
+}
+.calt-condpick-info { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.calt-condpick-date {
+  font-size:11px; font-weight:700; color:#fbbf24;
+  background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.2);
+  border-radius:4px; padding:1px 7px; display:inline-block; white-space:nowrap;
+}
+.calt-condpick-preview { font-size:11px; color:#4a5568; line-height:1.4; }
