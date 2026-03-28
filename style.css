@@ -676,3 +676,35 @@ body.calt-body-locked {
   border-radius:4px; padding:1px 7px; display:inline-block; white-space:nowrap;
 }
 .calt-condpick-preview { font-size:11px; color:#4a5568; line-height:1.4; }
+
+/* ── Deadline status rows ───────────────────────────────────── */
+.calt-dl-row-done {
+  opacity: 0.35;
+  text-decoration: line-through;
+  text-decoration-color: rgba(255,255,255,0.2);
+}
+.calt-dl-row-done:hover { opacity: 0.6; }
+
+/* Complete button */
+.calt-dl-done-btn { color:#4a5568 !important; }
+.calt-dl-done-btn:hover { color:#34d399 !important; background:rgba(52,211,153,0.1) !important; border-color:rgba(52,211,153,0.2) !important; }
+.calt-dl-done-active { color:#34d399 !important; background:rgba(52,211,153,0.1) !important; border-color:rgba(52,211,153,0.2) !important; }
+
+/* Ongoing button */
+.calt-dl-ongoing-btn { color:#4a5568 !important; }
+.calt-dl-ongoing-btn:hover { color:#a78bfa !important; background:rgba(167,139,250,0.1) !important; border-color:rgba(167,139,250,0.2) !important; }
+.calt-dl-ongoing-btn.calt-ev-pin-active { color:#a78bfa !important; background:rgba(167,139,250,0.12) !important; border-color:rgba(167,139,250,0.25) !important; }
+
+/* Ongoing date badge */
+.calt-dl-ongoing-badge {
+  color:#a78bfa !important;
+  background:rgba(167,139,250,0.1) !important;
+  border-color:rgba(167,139,250,0.25) !important;
+}
+
+/* Completed badge */
+.calt-dl-done-badge {
+  font-size:9px; font-weight:700; color:#34d399;
+  background:rgba(52,211,153,0.08); border-radius:4px;
+  padding:1px 5px; white-space:nowrap;
+}

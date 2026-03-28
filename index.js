@@ -111,8 +111,10 @@
       calendarRules:'',
       calendarConfig: defaultCalendarConfig(),
       autoScan:false, scanDepth:20, autoScanThreshold:3,
+      autoScanDeadlines:false, deadlineScanThreshold:1,
       depthRules:0, depthDeadlines:1, depthTimeline:4,
       deadlineHorizon:7,
+      threatRotationEvery:5, _threatRotationCounter:0,
       customApiEndpoint:'', customApiKey:'', customApiModel:'',
       monthSummaries:{}, monthSummarySnaps:{},
       manualHotMonths:[], manualColdMonths:[],
@@ -154,6 +156,10 @@
     if (s.depthTimeline === undefined) s.depthTimeline = 4;
     if (s.deadlineHorizon === undefined) s.deadlineHorizon = 7;
     if (s.autoScanThreshold === undefined) s.autoScanThreshold = 3;
+    if (s.autoScanDeadlines === undefined) s.autoScanDeadlines = false;
+    if (s.deadlineScanThreshold === undefined) s.deadlineScanThreshold = 1;
+    if (s.threatRotationEvery === undefined) s.threatRotationEvery = 5;
+    if (s._threatRotationCounter === undefined) s._threatRotationCounter = 0;
     if (s.customApiEndpoint === undefined) s.customApiEndpoint = '';
     if (s.customApiKey === undefined) s.customApiKey = '';
     if (s.customApiModel === undefined) s.customApiModel = '';
@@ -169,9 +175,15 @@
       if (e.hidden === undefined) e.hidden = false;
     });
     s.deadlines.forEach(e => {
-      if (e.pinned === undefined) e.pinned = false;
-      if (e.title === undefined) e.title = '';
-      if (e.dtype === undefined) e.dtype = 'event';
+      if (e.pinned === undefined)       e.pinned    = false;
+      if (e.title === undefined)        e.title     = '';
+      if (e.dtype === undefined)        e.dtype     = 'event';
+      if (e.completed === undefined)    e.completed = false;
+      if (e.ongoing === undefined) {
+        // Migrate: if date was literally "[ongoing]" or "ongoing", set flag
+        e.ongoing = /^ongoing$/i.test((e.date||'').trim());
+        if (e.ongoing) e.date = '';
+      }
     });
     // Migrate: split currentDate into three fields if needed
     if (s.currentDate && !s.currentDay && !s.currentMonthName) {
@@ -346,21 +358,20 @@
   }
 
   function isDeadlineHot(deadline) {
-    if (deadline.pinned) return true;
+    if (deadline.completed) return false; // completed → never in context
+    if (deadline.pinned)    return true;
+    if (deadline.ongoing)   return true;  // ongoing threats always in context
     const s = getSettings();
     const horizon = s.deadlineHorizon || 7;
     const curAbs = getCurrentAbsDay();
-    if (curAbs === null) return true; // no current date set — show everything
+    if (curAbs === null) return true;
     const p = parseDateString(deadline.date);
-    // If deadline has no day or no month, we can't calculate — treat as hot
     if (!p.day || !p.month) return true;
-    // No year: can't calculate reliable distance — always treat as hot.
-    // The UI will show a "год не указан" warning badge on the deadline row.
     if (!p.year) return true;
     const dlAbs = dateToAbsDayEnd(p.day, p.month, p.year);
-    if (dlAbs === null) return true; // month name not in config — treat as hot
+    if (dlAbs === null) return true;
     const diff = dlAbs - curAbs;
-    return diff <= horizon; // includes past deadlines and those within horizon
+    return diff <= horizon;
   }
 
   // Returns true if the deadline date is missing a year component
@@ -649,44 +660,92 @@
 
   function buildDeadlinesPromptText() {
     const s = getSettings();
-    const hotDls = s.deadlines.filter(e => isDeadlineHot(e));
-    if (!hotDls.length) return '';
     const curAbs = getCurrentAbsDay();
+
+    // Priority score for sorting: lower = higher priority in prompt
+    function dlPriority(e) {
+      if (e.pinned)   return 0;
+      if (e.ongoing)  return 1;
+      const p = parseDateString(e.date);
+      if (!p.year) return 5;
+      const dlAbs = dateToAbsDayEnd(p.day, p.month, p.year);
+      if (dlAbs === null) return 5;
+      const diff = dlAbs - (curAbs ?? dlAbs);
+      if (diff < 0)  return 2;   // overdue
+      if (diff <= 3) return 3;   // critical
+      return 4;                  // within horizon
+    }
+
+    function dlUrgencyTag(e) {
+      if (e.ongoing) return ' [ONGOING]';
+      if (!curAbs) return '';
+      const p = parseDateString(e.date);
+      if (!p.year) return ' (year unknown)';
+      const dlAbs = dateToAbsDayEnd(p.day, p.month, p.year);
+      if (dlAbs === null) return '';
+      const diff = dlAbs - curAbs;
+      if (diff < 0)       return ' (OVERDUE ' + Math.abs(diff) + 'd)';
+      if (diff === 0)     return ' (TODAY!)';
+      if (diff <= 3)      return ' (IN ' + diff + ' DAY' + (diff > 1 ? 'S' : '') + '!)';
+      return ' (in ' + diff + ' days)';
+    }
+
+    const hotDls = s.deadlines.filter(e => isDeadlineHot(e));
+
+    // ── Rotational dormant threat injection ──────────────────────────────
+    // Every N prompts, pick one cold (non-hot) threat and remind the model.
+    let dormantInject = null;
+    const rotEvery = s.threatRotationEvery || 5;
+    if (rotEvery > 0) {
+      s._threatRotationCounter = ((s._threatRotationCounter || 0) + 1);
+      if (s._threatRotationCounter >= rotEvery) {
+        s._threatRotationCounter = 0;
+        const coldThreats = s.deadlines.filter(e =>
+          !e.completed && !isDeadlineHot(e) &&
+          (e.dtype === 'threat' || e.pinned)
+        );
+        if (coldThreats.length) {
+          // Pick the one that hasn't been seen the longest (use id as proxy)
+          const pick = coldThreats.reduce((a, b) => (a.id < b.id ? a : b));
+          dormantInject = pick;
+        }
+      }
+    }
+
+    if (!hotDls.length && !dormantInject) return '';
+
+    // Sort by priority
     hotDls.sort((a, b) => {
-      const pa = parseDateString(a.date), pb = parseDateString(b.date);
-      // No year → sort to end (unknown timing)
-      const aa = pa.year ? dateToAbsDay(pa.day, pa.month, pa.year) : null;
-      const ab = pb.year ? dateToAbsDay(pb.day, pb.month, pb.year) : null;
+      const pa = dlPriority(a), pb = dlPriority(b);
+      if (pa !== pb) return pa - pb;
+      // Same priority bucket: sort by date asc
+      const da = parseDateString(a.date), db = parseDateString(b.date);
+      const aa = da.year ? dateToAbsDay(da.day, da.month, da.year) : null;
+      const ab = db.year ? dateToAbsDay(db.day, db.month, db.year) : null;
       if (aa !== null && ab !== null) return aa - ab;
-      if (aa !== null) return -1;
-      if (ab !== null) return  1;
       return 0;
     });
+
     const lines = ['[UPCOMING_START]'];
+
     hotDls.forEach(e => {
       const dt = dlTypeByKey(e.dtype);
       const titlePart = e.title ? e.title + ': ' : '';
-      const pinTag = e.pinned ? ' [📌]' : '';
-      // Calculate days-until for urgency (use end of range: "5-11" → day 11)
-      // Skip if no year — distance is unknown, don't emit misleading urgency
-      let urgency = '';
-      if (curAbs !== null) {
-        const p = parseDateString(e.date);
-        if (p.year) {
-          const dlAbs = dateToAbsDayEnd(p.day, p.month, p.year);
-          if (dlAbs !== null) {
-            const diff = dlAbs - curAbs;
-            if (diff < 0)      urgency = ' (OVERDUE ' + Math.abs(diff) + 'd)';
-            else if (diff === 0) urgency = ' (TODAY!)';
-            else if (diff <= 3)  urgency = ' (IN ' + diff + ' DAY' + (diff > 1 ? 'S' : '') + '!)';
-            else                 urgency = ' (in ' + diff + ' days)';
-          }
-        } else {
-          urgency = ' (year unknown)';
-        }
-      }
-      lines.push('• ' + dt.promptPrefix + ' ' + (e.date ? '[' + e.date + '] ' : '') + titlePart + e.text + urgency + pinTag);
+      const pinTag    = e.pinned ? ' [📌]' : '';
+      const urgency   = dlUrgencyTag(e);
+      const datePart  = e.ongoing ? '' : (e.date ? '[' + e.date + '] ' : '');
+      lines.push('• ' + dt.promptPrefix + ' ' + datePart + titlePart + e.text + urgency + pinTag);
     });
+
+    // Dormant threat reminder — injected at the end with a special label
+    if (dormantInject) {
+      const dt = dlTypeByKey(dormantInject.dtype);
+      const titlePart = dormantInject.title ? dormantInject.title + ': ' : '';
+      const datePart  = dormantInject.date ? '[' + dormantInject.date + '] ' : '';
+      lines.push('• [DORMANT ' + dt.promptPrefix + ' — still active, not yet triggered] ' +
+        datePart + titlePart + dormantInject.text);
+    }
+
     lines.push('[UPCOMING_END]');
     return lines.join('\n');
   }
@@ -1956,13 +2015,139 @@
 
   // ─── Deadlines tab ────────────────────────────────────────────────────────
   function buildDeadlinesTab() {
-    const s = getSettings(), cm = currentMonth();
+    const s = getSettings();
     const horizon = s.deadlineHorizon || 7;
+    const curAbs = getCurrentAbsDay();
+
+    function dlDaysUntil(e) {
+      if (e.ongoing || !curAbs) return null;
+      const p = parseDateString(e.date);
+      if (!p.day || !p.month || !p.year) return null;
+      const dlAbs = dateToAbsDayEnd(p.day, p.month, p.year);
+      return dlAbs !== null ? dlAbs - curAbs : null;
+    }
+
+    function renderDlRow(e) {
+      const hot = isDeadlineHot(e);
+      const dt = dlTypeByKey(e.dtype);
+      const daysUntil = dlDaysUntil(e);
+      const noYear = _deadlineMissingYear(e);
+      const approaching = daysUntil !== null && daysUntil >= 0 && daysUntil <= 3;
+
+      let dateBadge;
+      if (e.ongoing) {
+        dateBadge = '<span class="calt-ev-date calt-dl-ongoing-badge">⟳ текущая</span>';
+      } else if (e.date) {
+        dateBadge = '<span class="calt-ev-date' + (approaching ? ' calt-ev-date-urgent' : (noYear ? ' calt-ev-date-noyear' : '')) + '">'
+          + (approaching ? '⚠ ' : '') + esc(e.date) + '</span>';
+      } else {
+        dateBadge = '<span class="calt-ev-date calt-ev-date-empty">—</span>';
+      }
+
+      const typeBadge = '<span class="calt-dl-type-badge" style="border-color:' + dt.color + ';color:' + dt.color + '">' + dt.label + '</span>';
+      const noYearBadge = (!e.ongoing && noYear)
+        ? '<span class="calt-dl-noyear-badge" title="Год не указан">⚠ год?</span>'
+        : '';
+
+      let hotBadge = '';
+      if (e.completed) {
+        hotBadge = '<span class="calt-dl-done-badge">✓ завершено</span>';
+      } else if (e.ongoing) {
+        hotBadge = '<span class="calt-dl-hot-badge" style="color:#a78bfa">⟳ активная угроза</span>';
+      } else if (e.pinned) {
+        hotBadge = '<span class="calt-dl-hot-badge">📌 в контексте</span>';
+      } else if (noYear) {
+        hotBadge = '<span class="calt-dl-hot-badge" style="color:#f59e0b">● в контексте (год?)</span>';
+      } else if (hot) {
+        if (daysUntil !== null) {
+          if (daysUntil < 0)       hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● просрочен (' + Math.abs(daysUntil) + 'дн)</span>';
+          else if (daysUntil === 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● СЕГОДНЯ</span>';
+          else                      hotBadge = '<span class="calt-dl-hot-badge">● через ' + daysUntil + 'дн</span>';
+        } else {
+          hotBadge = '<span class="calt-dl-hot-badge">● нет даты</span>';
+        }
+      } else {
+        hotBadge = daysUntil !== null
+          ? '<span class="calt-dl-cold-badge">○ через ' + daysUntil + 'дн</span>'
+          : '<span class="calt-dl-cold-badge">○ скрыт</span>';
+      }
+
+      const titleHtml = e.title ? '<span class="calt-dl-title">' + esc(e.title) + '</span>' : '';
+      const pinClass  = e.pinned ? ' calt-ev-pin-active' : '';
+      const rowCls    = e.completed ? ' calt-dl-row-done'
+                      : (!hot && !e.ongoing) ? ' calt-dl-row-cold'
+                      : '';
+      const doneTitle = e.completed ? 'Реактивировать' : 'Отметить завершённым';
+      const ongoingActive = e.ongoing ? ' calt-ev-pin-active' : '';
+
+      return '<div class="calt-ev-row' + rowCls + '" data-id="' + e.id + '" data-type="deadline">'
+        + '<div class="calt-ev-left">' + dateBadge
+        + '<div class="calt-ev-content">'
+        + (titleHtml || '')
+        + '<span class="calt-ev-text" data-id="' + e.id + '" data-type="deadline">' + esc(e.text) + '</span>'
+        + '<div class="calt-dl-meta">' + typeBadge + hotBadge + noYearBadge + '</div>'
+        + '</div></div>'
+        + '<div class="calt-ev-acts">'
+        + '<button class="calt-ev-btn calt-dl-done-btn' + (e.completed ? ' calt-dl-done-active' : '') + '" data-id="' + e.id + '" title="' + doneTitle + '">✓</button>'
+        + '<button class="calt-ev-btn calt-dl-ongoing-btn' + ongoingActive + '" data-id="' + e.id + '" title="' + (e.ongoing ? 'Убрать флаг текущей угрозы' : 'Пометить как текущую угрозу') + '">⟳</button>'
+        + '<button class="calt-ev-btn calt-dl-type-btn" data-id="' + e.id + '" title="Тип">🏷</button>'
+        + '<button class="calt-ev-btn calt-ev-pin' + pinClass + '" data-id="' + e.id + '" data-type="deadline" title="' + (e.pinned ? 'Открепить' : 'Закрепить в контексте') + '">📌</button>'
+        + '<button class="calt-ev-btn calt-ev-edit" data-id="' + e.id + '" data-type="deadline">✎</button>'
+        + '<button class="calt-ev-btn calt-ev-del" data-id="' + e.id + '" data-type="deadline">✕</button>'
+        + '</div></div>';
+    }
+
+    // ── Group deadlines by status ──────────────────────────────────────────
+    const ongoing    = s.deadlines.filter(e => !e.completed && e.ongoing);
+    const hot        = s.deadlines.filter(e => !e.completed && !e.ongoing && isDeadlineHot(e));
+    const cold       = s.deadlines.filter(e => !e.completed && !e.ongoing && !isDeadlineHot(e));
+    const completed  = s.deadlines.filter(e => e.completed);
+
+    // Sort hot by urgency
+    function urgencySort(a, b) {
+      const da = dlDaysUntil(a), db = dlDaysUntil(b);
+      if (da !== null && db !== null) return da - db;
+      if (da !== null) return -1;
+      if (db !== null) return 1;
+      return 0;
+    }
+    hot.sort(urgencySort);
+    cold.sort(urgencySort);
+
+    let listHtml = '';
+
+    if (!s.deadlines.length) {
+      listHtml = '<div class="calt-empty">Дедлайнов нет.</div>';
+    } else {
+      function section(label, color, items, collKey, defaultColl) {
+        if (!items.length) return '';
+        const coll = _collapsedMonths['__dl_' + collKey] !== undefined
+          ? _collapsedMonths['__dl_' + collKey]
+          : defaultColl;
+        return '<div class="calt-month-group">'
+          + '<div class="calt-month-hdr calt-dl-month-hdr" data-month="__dl_' + collKey + '">'
+          + '<span class="calt-month-chev">' + (coll ? '▸' : '▾') + '</span>'
+          + '<span class="calt-month-name" style="color:' + color + '">' + label + '</span>'
+          + '<span class="calt-month-count">' + items.length + '</span>'
+          + '</div>'
+          + '<div class="calt-month-body"' + (coll ? ' style="display:none"' : '') + '>'
+          + items.map(renderDlRow).join('')
+          + '</div></div>';
+      }
+
+      listHtml =
+        section('⟳ Активные угрозы', '#a78bfa', ongoing,   'ongoing',   false) +
+        section('🔴 В контексте',     '#f87171', hot,       'hot',       false) +
+        section('○ За горизонтом',    '#4a5568', cold,      'cold',      true)  +
+        section('✓ Завершённые',      '#2d3b55', completed, 'done',      true);
+
+      if (!listHtml) listHtml = '<div class="calt-empty">Дедлайнов нет.</div>';
+    }
 
     // Type filter pills
     let typeFilterHtml = '';
     const usedTypes = {};
-    s.deadlines.forEach(e => { usedTypes[e.dtype || 'event'] = true; });
+    s.deadlines.forEach(e => { if (!e.completed) usedTypes[e.dtype || 'event'] = true; });
     if (Object.keys(usedTypes).length > 1) {
       typeFilterHtml = '<div class="calt-tag-filter-bar">' +
         DEADLINE_TYPES.filter(t => usedTypes[t.key]).map(t =>
@@ -1970,107 +2155,27 @@
         ).join('') + '</div>';
     }
 
-    let listHtml = '';
-    if (!s.deadlines.length) {
-      listHtml = '<div class="calt-empty">Дедлайнов нет.</div>';
-    } else {
-      // Helper: compute days-until for a deadline
-      const curAbs = getCurrentAbsDay();
-      function dlDaysUntil(e) {
-        if (curAbs === null) return null;
-        const p = parseDateString(e.date);
-        if (!p.day || !p.month) return null;
-        // No year → can't compute reliable distance; return null so UI shows the warning badge
-        if (!p.year) return null;
-        // Use end of day range ("5-11" → 11) so deadline stays active through the whole range
-        const dlAbs = dateToAbsDayEnd(p.day, p.month, p.year);
-        return dlAbs !== null ? dlAbs - curAbs : null;
-      }
-      // Group by month
-      const groups = {}, order = [];
-      s.deadlines.forEach(e => {
-        const m = extractMonth(e.date) || '— Без даты';
-        if (!groups[m]) { groups[m] = []; order.push(m); }
-        groups[m].push(e);
-      });
-      // Sort within each group by day (closest first)
-      Object.values(groups).forEach(arr => {
-        arr.sort((a, b) => {
-          const da = dlDaysUntil(a), db = dlDaysUntil(b);
-          if (da !== null && db !== null) return da - db;
-          if (da !== null) return -1;
-          if (db !== null) return  1;
-          return 0;
-        });
-      });
-      order.forEach(month => {
-        listHtml += '<div class="calt-month-group">'
-          + '<div class="calt-month-hdr calt-dl-month-hdr" data-month="' + esc(month) + '">'
-          + '<span class="calt-month-chev">▾</span>'
-          + '<span class="calt-month-name">' + esc(month) + '</span>'
-          + '<span class="calt-month-count">' + groups[month].length + '</span>'
-          + '</div>'
-          + '<div class="calt-month-body">';
-        groups[month].forEach(e => {
-          const hot = isDeadlineHot(e);
-          const dt = dlTypeByKey(e.dtype);
-          const daysUntil = dlDaysUntil(e);
-          const noYear = _deadlineMissingYear(e);
-          const approaching = daysUntil !== null && daysUntil >= 0 && daysUntil <= 3;
-          const dateBadge = e.date
-            ? '<span class="calt-ev-date' + (approaching ? ' calt-ev-date-urgent' : (noYear ? ' calt-ev-date-noyear' : '')) + '">'
-              + (approaching ? '⚠ ' : '') + esc(e.date) + '</span>'
-            : '<span class="calt-ev-date calt-ev-date-empty">—</span>';
-          const typeBadge = '<span class="calt-dl-type-badge" style="border-color:' + dt.color + ';color:' + dt.color + '">' + dt.label + '</span>';
-          // "Год не указан" warning — shown when date has day+month but no year
-          const noYearBadge = noYear
-            ? '<span class="calt-dl-noyear-badge" title="Год не указан — дедлайн всегда в контексте. Откройте редактирование и добавьте год.">⚠ год не указан</span>'
-            : '';
-          // Compute reason for hot/cold status
-          let hotBadge;
-          if (e.pinned) {
-            hotBadge = '<span class="calt-dl-hot-badge">📌 в контексте</span>';
-          } else if (noYear) {
-            // Year unknown — always hot, but we show the warning instead of a distance
-            hotBadge = '<span class="calt-dl-hot-badge" style="color:#f59e0b">● в контексте (год?)</span>';
-          } else if (hot) {
-            if (daysUntil !== null) {
-              if (daysUntil < 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● просрочен (' + Math.abs(daysUntil) + 'дн)</span>';
-              else if (daysUntil === 0) hotBadge = '<span class="calt-dl-hot-badge" style="color:#f87171">● СЕГОДНЯ</span>';
-              else hotBadge = '<span class="calt-dl-hot-badge">● через ' + daysUntil + 'дн</span>';
-            } else {
-              hotBadge = '<span class="calt-dl-hot-badge">● нет даты</span>';
-            }
-          } else {
-            if (daysUntil !== null) {
-              hotBadge = '<span class="calt-dl-cold-badge">○ через ' + daysUntil + 'дн</span>';
-            } else {
-              hotBadge = '<span class="calt-dl-cold-badge">○ скрыт</span>';
-            }
-          }
-          const titleHtml = e.title ? '<span class="calt-dl-title">' + esc(e.title) + '</span>' : '';
-          const pinClass = e.pinned ? ' calt-ev-pin-active' : '';
-          listHtml += '<div class="calt-ev-row' + (hot ? '' : ' calt-dl-row-cold') + '" data-id="' + e.id + '" data-type="deadline">'
-            + '<div class="calt-ev-left">' + dateBadge
-            + '<div class="calt-ev-content">'
-            + (titleHtml ? titleHtml : '')
-            + '<span class="calt-ev-text" data-id="' + e.id + '" data-type="deadline">' + esc(e.text) + '</span>'
-            + '<div class="calt-dl-meta">' + typeBadge + hotBadge + noYearBadge + '</div>'
-            + '</div></div>'
-            + '<div class="calt-ev-acts">'
-            + '<button class="calt-ev-btn calt-dl-type-btn" data-id="' + e.id + '" title="Тип">🏷</button>'
-            + '<button class="calt-ev-btn calt-ev-pin' + pinClass + '" data-id="' + e.id + '" data-type="deadline" title="' + (e.pinned?'Открепить':'Закрепить в контексте') + '">📌</button>'
-            + '<button class="calt-ev-btn calt-ev-edit" data-id="' + e.id + '" data-type="deadline">✎</button>'
-            + '<button class="calt-ev-btn calt-ev-del" data-id="' + e.id + '" data-type="deadline">✕</button>'
-            + '</div></div>';
-        });
-        listHtml += '</div></div>';
-      });
-    }
-
-    // Legend
     const legendHtml = '<div class="calt-legend">'
-      + '<div class="calt-legend-left"><span class="calt-dl-hot-badge">● в контексте</span> ≤' + horizon + 'дн · <span class="calt-dl-cold-badge">○ скрыт</span> · 📌 фиксация</div>'
+      + '<div class="calt-legend-left">'
+      + '<span style="color:#f87171;font-size:10px">● горячие</span> ≤' + horizon + 'дн · '
+      + '<span style="color:#a78bfa;font-size:10px">⟳ угрозы</span> всегда · '
+      + '<span style="color:#2d3b55;font-size:10px">✓ завершённые</span> скрыты из промпта'
+      + '</div></div>';
+
+    // Auto-scan for deadlines setting
+    const dlScanHtml = '<div class="calt-scan-row" style="flex-wrap:wrap;gap:5px;align-items:center">'
+      + '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#94a3b8;cursor:pointer">'
+      + '<input type="checkbox" id="calt_dl_autoscan" style="accent-color:#fbbf24"' + (s.autoScanDeadlines ? ' checked' : '') + '>'
+      + 'Авто-сканирование дедлайнов</label>'
+      + '<span style="font-size:10px;color:#3d4a60">каждые</span>'
+      + '<input type="number" class="calt-depth-inp" id="calt_dl_scan_threshold" min="1" max="20" style="width:38px" value="' + (s.deadlineScanThreshold || 1) + '">'
+      + '<span style="font-size:10px;color:#3d4a60">сообщений</span>'
+      + '</div>';
+
+    const rotHtml = '<div class="calt-scan-row" style="align-items:center;flex-wrap:wrap;gap:5px">'
+      + '<span style="font-size:11px;color:#4a5568">⟳ Напоминать об угрозах каждые</span>'
+      + '<input type="number" class="calt-depth-inp" id="calt_threat_rotation" min="0" max="50" style="width:42px" value="' + (s.threatRotationEvery || 5) + '">'
+      + '<span style="font-size:10px;color:#3d4a60">промптов (0 = выкл)</span>'
       + '</div>';
 
     return legendHtml + typeFilterHtml
@@ -2090,6 +2195,7 @@
       + '<span class="calt-scan-unit">сообщений</span>'
       + '<button class="menu_button calt-scan-btn" id="calt_scan_dl_btn">✦ Сканировать</button>'
       + '</div>'
+      + dlScanHtml + rotHtml
       + '<div class="calt-scan-status" id="calt_scan_dl_status"></div>';
   }
 
@@ -2404,6 +2510,41 @@
       renderTabContent();
     });
     $('#calt_add_dl_txt').off('keydown').on('keydown', e => { if (e.key==='Enter') $('#calt_add_dl_btn').click(); });
+
+    // ── Complete toggle ───────────────────────────────────────────────────
+    if (activeTab === 'deadlines') {
+      $('.calt-dl-done-btn').off('click').on('click', function() {
+        const id = +$(this).data('id'), s = getSettings();
+        const item = s.deadlines.find(e => e.id === id); if (!item) return;
+        item.completed = !item.completed;
+        if (item.completed) { item.pinned = false; item.ongoing = false; }
+        save(); updatePrompt(); renderTabContent();
+        toast(item.completed ? '✓ Завершено — скрыто из промпта' : 'Реактивировано', item.completed ? '#34d399' : '#fbbf24');
+      });
+
+      // ── Ongoing toggle ────────────────────────────────────────────────
+      $('.calt-dl-ongoing-btn').off('click').on('click', function() {
+        const id = +$(this).data('id'), s = getSettings();
+        const item = s.deadlines.find(e => e.id === id); if (!item) return;
+        item.ongoing = !item.ongoing;
+        if (item.ongoing) { item.completed = false; item.date = ''; }
+        save(); updatePrompt(); renderTabContent();
+        toast(item.ongoing ? '⟳ Помечено как активная угроза' : 'Убран флаг угрозы', '#a78bfa');
+      });
+    }
+
+    // ── Deadline auto-scan settings ───────────────────────────────────────
+    $('#calt_dl_autoscan').off('change').on('change', function() {
+      getSettings().autoScanDeadlines = this.checked; save();
+    });
+    $('#calt_dl_scan_threshold').off('change').on('change', function() {
+      const v = Math.max(1, +this.value || 1);
+      this.value = v; getSettings().deadlineScanThreshold = v; save();
+    });
+    $('#calt_threat_rotation').off('change').on('change', function() {
+      const v = Math.max(0, +this.value);
+      this.value = v; getSettings().threatRotationEvery = v; save();
+    });
 
     // ── Deadline type picker ──────────────────────────────────────────
     if (activeTab === 'deadlines') {
@@ -2897,55 +3038,83 @@
   }
 
   // ─── Smart autoscan ───────────────────────────────────────────────────────
+  let _dlAutoScanTimer   = null;
+  let _dlAutoScanLen     = 0;
+  let _dlAutoScanRunning = false;
+
   async function tryAutoScan() {
     const s = getSettings();
-    if (!s.autoScan || !s.enabled) return;
-    if (_autoScanRunning) return; // already in progress — skip, don't queue another
+    if (!s.enabled) return;
     const chat = ctx().chat || [];
-    const threshold = s.autoScanThreshold || 3;
-    if (chat.length <= _lastAutoLen || (chat.length - _lastAutoLen) < threshold) return;
-    // Snapshot the length now — if more messages arrive while we're scanning, we'll
-    // see them on the next call after this one finishes.
-    const lenSnapshot = chat.length;
-    clearTimeout(_autoScanTimer);
-    _autoScanTimer = setTimeout(async () => {
-      if (_autoScanRunning) return; // double-check inside the timeout
-      _autoScanRunning = true;
-      _lastAutoLen = lenSnapshot;
-      try {
-        const lastMsg = chat[chat.length - 1];
-        const sig = await isMessageSignificant(lastMsg ? (lastMsg.mes||'') : '');
-        if (!sig) return;
-        const evSnap = JSON.stringify(s.keyEvents), dlSnap = JSON.stringify(s.deadlines);
-        const oldEvCount = s.keyEvents.length, oldDlCount = s.deadlines.length;
-        const [events, deadlines] = await Promise.all([
-          scanKeyEvents(s.scanDepth),
-          scanDeadlines(s.scanDepth),
-        ]);
-        const newEvCount = events.length - oldEvCount;
-        const newDlCount = deadlines.length - oldDlCount;
-        if (newEvCount > 0 || newDlCount > 0) {
-          s.keyEvents = events;
-          s.deadlines = deadlines;
-          s.nextEventId = Math.max(0, ...events.map(e => e.id||0)) + 1;
-          s.nextDeadlineId = Math.max(0, ...deadlines.map(e => e.id||0)) + 1;
-          save(); updatePrompt(); updateMeta();
-          if (_isModalOpen()) renderTabContent();
-          const parts = [];
-          if (newEvCount > 0) parts.push('+' + newEvCount + ' событий');
-          if (newDlCount > 0) parts.push('+' + newDlCount + ' дедлайнов');
-          toast('Автоскан: ' + parts.join(', '), '#34d399', () => {
-            s.keyEvents  = JSON.parse(evSnap);
-            s.deadlines  = JSON.parse(dlSnap);
-            s.nextEventId    = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
-            s.nextDeadlineId = Math.max(0, ...s.deadlines.map(e => e.id||0)) + 1;
-            save(); updatePrompt(); updateMeta();
-            if (_isModalOpen()) renderTabContent();
-          });
-        }
-      } catch(e) { console.warn('[CalTracker] autoscan error:', e.message); }
-      finally    { _autoScanRunning = false; }
-    }, 2000);
+
+    // ── Events autoscan ──────────────────────────────────────────────────
+    if (s.autoScan && !_autoScanRunning) {
+      const threshold = s.autoScanThreshold || 3;
+      if (chat.length > _lastAutoLen && (chat.length - _lastAutoLen) >= threshold) {
+        const lenSnapshot = chat.length;
+        clearTimeout(_autoScanTimer);
+        _autoScanTimer = setTimeout(async () => {
+          if (_autoScanRunning) return;
+          _autoScanRunning = true;
+          _lastAutoLen = lenSnapshot;
+          try {
+            const lastMsg = chat[chat.length - 1];
+            const sig = await isMessageSignificant(lastMsg ? (lastMsg.mes||'') : '');
+            if (!sig) return;
+            const evSnap = JSON.stringify(s.keyEvents);
+            const oldEvCount = s.keyEvents.length;
+            const events = await scanKeyEvents(s.scanDepth);
+            const newEvCount = events.length - oldEvCount;
+            if (newEvCount > 0) {
+              s.keyEvents = events;
+              s.nextEventId = Math.max(0, ...events.map(e => e.id||0)) + 1;
+              save(); updatePrompt(); updateMeta();
+              if (_isModalOpen()) renderTabContent();
+              toast('Автоскан событий: +' + newEvCount, '#34d399', () => {
+                s.keyEvents = JSON.parse(evSnap);
+                s.nextEventId = Math.max(0, ...s.keyEvents.map(e => e.id||0)) + 1;
+                save(); updatePrompt(); updateMeta();
+                if (_isModalOpen()) renderTabContent();
+              });
+            }
+          } catch(e) { console.warn('[CalTracker] event autoscan error:', e.message); }
+          finally    { _autoScanRunning = false; }
+        }, 2000);
+      }
+    }
+
+    // ── Deadlines autoscan (separate threshold, no significance check) ───
+    if (s.autoScanDeadlines && !_dlAutoScanRunning) {
+      const dlThreshold = s.deadlineScanThreshold || 1;
+      if (chat.length > _dlAutoScanLen && (chat.length - _dlAutoScanLen) >= dlThreshold) {
+        const lenSnapshot = chat.length;
+        clearTimeout(_dlAutoScanTimer);
+        _dlAutoScanTimer = setTimeout(async () => {
+          if (_dlAutoScanRunning) return;
+          _dlAutoScanRunning = true;
+          _dlAutoScanLen = lenSnapshot;
+          try {
+            const dlSnap = JSON.stringify(s.deadlines);
+            const oldDlCount = s.deadlines.length;
+            const deadlines = await scanDeadlines(s.scanDepth);
+            const newDlCount = deadlines.length - oldDlCount;
+            if (newDlCount > 0) {
+              s.deadlines = deadlines;
+              s.nextDeadlineId = Math.max(0, ...deadlines.map(e => e.id||0)) + 1;
+              save(); updatePrompt(); updateMeta();
+              if (_isModalOpen() && activeTab === 'deadlines') renderTabContent();
+              toast('Автоскан дедлайнов: +' + newDlCount, '#fbbf24', () => {
+                s.deadlines = JSON.parse(dlSnap);
+                s.nextDeadlineId = Math.max(0, ...s.deadlines.map(e => e.id||0)) + 1;
+                save(); updatePrompt(); updateMeta();
+                if (_isModalOpen()) renderTabContent();
+              });
+            }
+          } catch(e) { console.warn('[CalTracker] deadline autoscan error:', e.message); }
+          finally    { _dlAutoScanRunning = false; }
+        }, 1500);
+      }
+    }
   }
 
   // ─── ST events + keyboard shortcut ───────────────────────────────────────
@@ -2957,7 +3126,8 @@
     });
 
     eventSource.on(event_types.CHAT_CHANGED, async () => {
-      _lastAutoLen = 0; _collapsedMonths = {}; _searchQuery = ''; _tagFilter = null;
+      _lastAutoLen = 0; _dlAutoScanLen = 0;
+      _collapsedMonths = {}; _searchQuery = ''; _tagFilter = null;
       _cfgDraft = null; _cfgDirty = false; clearDraftFromSession();
       refreshSettingsUi(); await updatePrompt();
       if (_isModalOpen()) {
