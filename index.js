@@ -961,15 +961,36 @@
   }
 
   // ─── Scan ─────────────────────────────────────────────────────────────────
-  function parseEventList(text, startId) {
+  // Commentary patterns that AIs produce when they have nothing to report
+  const _AI_COMMENTARY_RE = /^(the chat|this chat|chat focuses|no new|no concrete|nothing new|nothing qualifies|i (found|see|note|output|cannot|don't)|since there|there are no|there is no|based on|analyzing|looking at|reviewing|in (this|the) (chat|conversation)|past event|present moment|general|summary|note:|as requested|unfortunately)/i;
+
+  // parseEventList — parses AI output into event objects.
+  // strict=true (deadlines): ONLY accept [DATE] text lines, reject all dateless commentary.
+  // strict=false (events): also accept dateless lines (legacy behaviour).
+  function parseEventList(text, startId, strict) {
+    // Quick early-out: model said nothing to report
+    if (!text || /^\s*(NONE|NOTHING|—|-)\s*$/i.test(text.trim())) return [];
+
     const events = [], id = { v: startId || Date.now() };
     (text||'').split('\n').map(l=>l.trim()).filter(Boolean).forEach(line => {
+      // Skip known header/section lines
       if (/^(EXISTING|ALREADY|KEY EVENTS|UPCOMING|OUTPUT|FORMAT|RULES|STRICT|NOTE|PAST|CURRENT)/i.test(line)) return;
+      // Skip lines that end with ':' — these are category headers, not entries
+      if (/:\s*$/.test(line)) return;
+      // Skip lines that look like AI commentary / explanation
+      if (_AI_COMMENTARY_RE.test(line)) return;
+      // Skip parenthetical meta-labels AI adds: "(past event)", "(present moment)", etc.
+      if (/\(past event\)|\(present\s*(moment|tense)\)|\(already\s*(exists?|listed)\)/i.test(line)) return;
+
       const clean = line.replace(/^[-•*\d.]\s*/, '');
       const m = clean.match(/^\[([^\]]+)\]\s+(.+)$/);
-      if (m) events.push({ id:id.v++, date:m[1].trim(), text:m[2].trim(), pinned:false, tags:[] });
-      else if (clean.length > 4 && !clean.startsWith('#') && !clean.startsWith('['))
+      if (m) {
+        events.push({ id:id.v++, date:m[1].trim(), text:m[2].trim(), pinned:false, tags:[] });
+      } else if (!strict && clean.length > 4 && !clean.startsWith('#') && !clean.startsWith('[')) {
+        // Non-strict: accept dateless lines (events tab only)
         events.push({ id:id.v++, date:'', text:clean, pinned:false, tags:[] });
+      }
+      // strict=true: silently drop lines without [DATE] format
     });
     return events;
   }
@@ -1304,30 +1325,32 @@
       'You scan roleplay chat for CONCRETE UPCOMING EVENTS with TIME PRESSURE.\n\n' +
         'YOUR JOB: Find where characters mention future arrivals, deadlines, scheduled events,\n' +
         'approaching dangers WITH a time reference. CALCULATE the specific in-world date.\n\n' +
-        'RULES:\n' +
-        '- Output ONLY items NOT in EXISTING list. If nothing new, output NOTHING.\n' +
-        '- ALWAYS calculate a specific date when time is mentioned:\n' +
-        '  "in 3 days" + current date 14 Naeris \u2192 [17 Naeris]\n' +
-        '  "next week" + current date 14 Naeris \u2192 [~21 Naeris]\n' +
-        '  "before month end" + month has 30 days \u2192 [30 Naeris]\n' +
-        '- Use [ongoing] ONLY for active persistent dangers with NO time reference at all\n' +
-        '- Format: [DATE] Who/what arrives/happens/threatens (MAX 15 words)\n\n' +
-        'EXTRACT THESE:\n' +
-        '\u2713 Arrivals: "House X arrives in 3 days" \u2192 [17 Naeris] House X delegation arrives; potential conflict\n' +
-        '\u2713 Deadlines: "ritual must complete by full moon" \u2192 [DATE] Ritual deadline at full moon\n' +
-        '\u2713 Threats: "inquisitor returns before month end" \u2192 [~30 Naeris] Inquisitor returns for inspection\n' +
-        '\u2713 Ongoing: [ongoing] Active investigation by Inquisitor; discovery = exposure\n\n' +
-        'REJECT THESE (NOT deadlines):\n' +
-        '\u2717 Character traits or secrets: "Gasil\'s secret" \u2190 not an event, no date\n' +
-        '\u2717 Prophecies without timeline: "Selena is chosen" \u2190 not actionable\n' +
-        '\u2717 Vague states: "danger exists", "anomaly detected" \u2190 no specifics\n' +
-        '\u2717 Past events: anything that already happened\n' +
-        '\u2717 Entries shorter than 10 words\n\n' +
-        'LITMUS TEST: Does this answer "WHAT happens WHEN and WHY is it dangerous?" If not \u2192 reject.\n\n' +
-        (existing ? 'EXISTING (do NOT repeat):\n' + existing + '\n\n' : '') +
+        '⚠ OUTPUT RULES — READ CAREFULLY:\n' +
+        '- If you find qualifying events: output ONLY lines in format [DATE] description\n' +
+        '- If you find NOTHING qualifying: output the single word NONE — nothing else\n' +
+        '- DO NOT explain, summarize, or comment. Zero prose. Zero headers.\n' +
+        '- DO NOT output past events, general threats without dates, or chat summaries.\n' +
+        '- DO NOT output lines like "The chat focuses on..." or "There are no new..."\n\n' +
+        'FORMAT (only this, nothing else):\n' +
+        '[DATE] Who/what happens/threatens — MAX 15 words\n\n' +
+        'EXAMPLES OF VALID OUTPUT:\n' +
+        '[17 Naeris] House X delegation arrives; potential conflict with current host\n' +
+        '[ongoing] Active inquisitor investigation — discovery means exposure\n\n' +
+        'EXAMPLES OF INVALID OUTPUT (DO NOT produce these):\n' +
+        '✗ "The chat focuses on Selena\'s recovery" — summary, not a deadline\n' +
+        '✗ "Selena discovering a corpse (past event)" — past, no date\n' +
+        '✗ "Since there are no new events, I output:" — explanation forbidden\n' +
+        '✗ "General ongoing threats already in the list" — vague, no action\n\n' +
+        'ACCEPT ONLY:\n' +
+        '✓ Future arrivals with date: "arrives in 3 days" → [DATE]\n' +
+        '✓ Deadlines: "ritual by full moon" → [DATE]\n' +
+        '✓ Active undated threats: [ongoing] — ONLY if genuinely ongoing\n\n' +
+        'LITMUS TEST: Can you answer "WHAT happens WHEN and WHY dangerous?" → output it\n' +
+        'Otherwise → NONE\n\n' +
+        (existing ? 'EXISTING (do NOT repeat these):\n' + existing + '\n\n' : '') +
         (past ? 'PAST EVENTS (EXCLUDE):\n' + past : '')
     );
-    let newDls = parseEventList(result, s.nextDeadlineId);
+    let newDls = parseEventList(result, s.nextDeadlineId, true);
     // Filter: reject short garbage entries
     newDls = newDls.filter(e => e.text.length >= 15);
     // Truncate oversized
