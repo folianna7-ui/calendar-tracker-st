@@ -74,6 +74,22 @@
 
   function currentMonth() { return extractMonth(getSettings().currentDate); }
 
+  // Returns "Month Year" group key (e.g. "Florens 847"), or just "Month" if no year.
+  // Used for grouping events so "Veris 847" ≠ "Veris 848".
+  function extractMonthYear(dateStr) {
+    if (!dateStr || !dateStr.trim()) return null;
+    const p = parseDateString(dateStr);
+    if (!p.month) return null;
+    return p.year ? p.month + ' ' + p.year : p.month;
+  }
+
+  // Current date as a "Month Year" group key
+  function currentMonthYear() {
+    const s = getSettings();
+    if (!s.currentMonthName) return null;
+    return s.currentYear ? s.currentMonthName + ' ' + s.currentYear : s.currentMonthName;
+  }
+
   function buildDateString(d, m, y) { return [d, m, y].filter(Boolean).join(' '); }
 
   function parseDateString(str) {
@@ -335,26 +351,33 @@
     if (daysAgo === 1) return ' (yesterday)';
     return ' (' + daysAgo + 'd ago)';
   }
-  function isSummaryOutdated(month) {
+  // groupKey is now "Month Year" (e.g. "Florens 847")
+  function isSummaryOutdated(groupKey) {
     const s = getSettings();
-    if (!s.monthSummaries[month]) return false;
-    const snap    = (s.monthSummarySnaps || {})[month] || 0;
-    const current = s.keyEvents.filter(e => extractMonth(e.date) === month).length;
+    if (!s.monthSummaries[groupKey]) return false;
+    const snap    = (s.monthSummarySnaps || {})[groupKey] || 0;
+    const current = s.keyEvents.filter(e => extractMonthYear(e.date) === groupKey).length;
     return current > snap;
   }
 
-  function saveSummarySnap(month) {
+  function saveSummarySnap(groupKey) {
     const s = getSettings();
     if (!s.monthSummarySnaps) s.monthSummarySnaps = {};
-    s.monthSummarySnaps[month] = s.keyEvents.filter(e => extractMonth(e.date) === month).length;
+    s.monthSummarySnaps[groupKey] = s.keyEvents.filter(e => extractMonthYear(e.date) === groupKey).length;
   }
 
   // ─── Hot month ────────────────────────────────────────────────────────────
-  function isMonthHot(month) {
-    const s = getSettings(), cm = currentMonth();
-    if (s.manualHotMonths.includes(month))  return true;
-    if (s.manualColdMonths.includes(month)) return false;
-    return !!(cm && month === cm);
+  // groupKey = "Month Year" or just "Month" for legacy data
+  function isMonthHot(groupKey) {
+    const s = getSettings();
+    if (s.manualHotMonths.includes(groupKey))  return true;
+    if (s.manualColdMonths.includes(groupKey)) return false;
+    const cmY = currentMonthYear();
+    if (cmY && groupKey === cmY) return true;
+    // Legacy fallback: if groupKey has no year part, compare by month name only
+    const cm = currentMonth();
+    if (cm && groupKey === cm) return true;
+    return false;
   }
 
   function isDeadlineHot(deadline) {
@@ -593,7 +616,7 @@
 
     // HOT layer — sorted chronologically, skip hidden events
     const hotEvents = s.keyEvents
-      .filter(e => !e.hidden && (e.pinned || isMonthHot(extractMonth(e.date) || '')))
+      .filter(e => !e.hidden && (e.pinned || isMonthHot(extractMonthYear(e.date) || '')))
       .sort((a, b) => {
         const pa = parseDateString(a.date), pb = parseDateString(b.date);
         const aa = dateToAbsDay(pa.day, pa.month, pa.year);
@@ -1166,7 +1189,7 @@
   // ─── Per-month AI condensation with date picker ───────────────────────────
   function openCondenseDatePicker(month, $btn) {
     const s = getSettings();
-    const monthEvents = s.keyEvents.filter(e => extractMonth(e.date) === month);
+    const monthEvents = s.keyEvents.filter(e => extractMonthYear(e.date) === month);
     if (monthEvents.length < 2) {
       toast('Нужно минимум 2 записи для конденсации', '#f59e0b'); return;
     }
@@ -1272,7 +1295,7 @@
       const oldTotal = s.keyEvents.length;
       // Rebuild: other months + kept dates in this month + condensed
       s.keyEvents = [
-        ...s.keyEvents.filter(e => extractMonth(e.date) !== month),
+        ...s.keyEvents.filter(e => extractMonthYear(e.date) !== month),
         ...toKeep,
         ...parsed,
       ];
@@ -1419,7 +1442,7 @@
   async function generateMonthSummary(month) {
     const s = getSettings();
     const evs = s.keyEvents
-      .filter(e => extractMonth(e.date) === month)
+      .filter(e => extractMonthYear(e.date) === month)
       .sort((a, b) => {
         const pa = parseDateString(a.date), pb = parseDateString(b.date);
         const aa = dateToAbsDay(pa.day, pa.month, pa.year);
@@ -1953,11 +1976,13 @@
         : '<div class="calt-empty">Событий нет.<br><small>Нажмите ✦ Сканировать</small></div>';
     } else {
       const groups = {}, order = [];
+      // Group by "Month Year" key
       filtered.forEach(e => {
-        const m = extractMonth(e.date) || '— Без даты';
-        if (!groups[m]) { groups[m] = []; order.push(m); }
-        groups[m].push(e);
+        const key = extractMonthYear(e.date) || '— Без даты';
+        if (!groups[key]) { groups[key] = []; order.push(key); }
+        groups[key].push(e);
       });
+
       // Sort within each group by day (chronological)
       Object.values(groups).forEach(arr => {
         arr.sort((a, b) => {
@@ -1966,38 +1991,67 @@
           return da - db;
         });
       });
-      // Move "— Без даты" to end
-      const ndi = order.indexOf('— Без даты');
-      if (ndi > -1 && ndi < order.length - 1) {
-        order.splice(ndi, 1);
-        order.push('— Без даты');
-      }
-      order.forEach(month => {
-        const hot = isMonthHot(month), coll = !!_collapsedMonths[month];
-        const summ = s.monthSummaries[month] || '';
-        const outdated = isSummaryOutdated(month);
+
+      // Sort groups: by year ASC, then by month index in calendarConfig
+      const cc = s.calendarConfig;
+      const monthIdx = name => cc.months.findIndex(m => m.name.toLowerCase() === (name||'').toLowerCase());
+      order.sort((a, b) => {
+        if (a === '— Без даты') return 1;
+        if (b === '— Без даты') return -1;
+        const pa = parseDateString(a + ' _'), pb = parseDateString(b + ' _'); // trick: treat key as date-like
+        // Actually parse year+month from the group key string directly
+        const partsA = a.split(' '), partsB = b.split(' ');
+        const yearA = parseInt(partsA[partsA.length - 1], 10) || 0;
+        const yearB = parseInt(partsB[partsB.length - 1], 10) || 0;
+        const monthNameA = partsA.slice(0, -1).join(' ') || a;
+        const monthNameB = partsB.slice(0, -1).join(' ') || b;
+        const miA = monthIdx(yearA ? monthNameA : a);
+        const miB = monthIdx(yearB ? monthNameB : b);
+        if (yearA !== yearB) return yearA - yearB;
+        return (miA < 0 ? 999 : miA) - (miB < 0 ? 999 : miB);
+      });
+
+      order.forEach(groupKey => {
+        const hot = isMonthHot(groupKey), coll = !!_collapsedMonths[groupKey];
+        const summ = s.monthSummaries[groupKey] || '';
+        const outdated = isSummaryOutdated(groupKey);
         const outdatedBadge = (outdated && summ)
           ? '<span class="calt-summ-outdated" title="Добавлены новые события">⚠ устарело</span>' : '';
+
+        // Parse month name and year from group key for quick-add prefill
+        const gkParts = groupKey.split(' ');
+        const gkYear  = /^\d+$/.test(gkParts[gkParts.length - 1]) ? gkParts[gkParts.length - 1] : '';
+        const gkMonth = gkYear ? gkParts.slice(0, -1).join(' ') : groupKey;
+
         listHtml += '<div class="calt-month-group">'
-          + '<div class="calt-month-hdr" data-month="' + esc(month) + '">'
+          + '<div class="calt-month-hdr" data-month="' + esc(groupKey) + '">'
           + '<span class="calt-month-chev">' + (coll?'▸':'▾') + '</span>'
-          + '<span class="calt-month-name">' + esc(month) + '</span>'
+          + '<span class="calt-month-name">' + esc(groupKey) + '</span>'
           + (hot
-            ? '<span class="calt-layer-badge calt-layer-hot calt-layer-toggle" data-month="' + esc(month) + '" title="Нажмите — пометить как прошлый">● текущий</span>'
-            : '<span class="calt-layer-badge calt-layer-warm calt-layer-toggle" data-month="' + esc(month) + '" title="Нажмите — пометить как текущий">● прошлый</span>')
-          + '<span class="calt-month-count">' + groups[month].length + '</span>'
-          + (groups[month].length >= 2 ? '<button class="calt-summ-gen-btn calt-month-cond-btn" data-month="' + esc(month) + '" title="⚡ Конденсировать этот месяц">⚡</button>' : '')
-          + (!hot ? '<button class="calt-summ-gen-btn" data-month="' + esc(month) + '" title="AI саммери">✦</button>' : '')
+            ? '<span class="calt-layer-badge calt-layer-hot calt-layer-toggle" data-month="' + esc(groupKey) + '" title="Нажмите — пометить как прошлый">● текущий</span>'
+            : '<span class="calt-layer-badge calt-layer-warm calt-layer-toggle" data-month="' + esc(groupKey) + '" title="Нажмите — пометить как текущий">● прошлый</span>')
+          + '<span class="calt-month-count">' + groups[groupKey].length + '</span>'
+          + (groups[groupKey].length >= 2 ? '<button class="calt-summ-gen-btn calt-month-cond-btn" data-month="' + esc(groupKey) + '" title="⚡ Конденсировать этот месяц">⚡</button>' : '')
+          + (!hot ? '<button class="calt-summ-gen-btn" data-month="' + esc(groupKey) + '" title="AI саммери">✦</button>' : '')
           + '</div>';
+
         if (!hot) {
-          listHtml += '<div class="calt-month-summ-row" data-month="' + esc(month) + '">'
+          listHtml += '<div class="calt-month-summ-row" data-month="' + esc(groupKey) + '">'
             + (summ
-              ? '<span class="calt-summ-text" data-month="' + esc(month) + '">' + esc(summ) + '</span>' + outdatedBadge
-              : '<span class="calt-summ-empty" data-month="' + esc(month) + '">нет саммери — кликните или нажмите ✦</span>')
+              ? '<span class="calt-summ-text" data-month="' + esc(groupKey) + '">' + esc(summ) + '</span>' + outdatedBadge
+              : '<span class="calt-summ-empty" data-month="' + esc(groupKey) + '">нет саммери — кликните или нажмите ✦</span>')
             + '</div>';
         }
+
+        // Quick-add row — pre-filled with this group's month and year
+        const qaId = 'calt_qa_' + groupKey.replace(/[^a-z0-9]/gi, '_');
         listHtml += '<div class="calt-month-body"' + (coll?' style="display:none"':'') + '>'
-          + groups[month].map(e => eventRow(e,'event')).join('')
+          + groups[groupKey].map(e => eventRow(e,'event')).join('')
+          + '<div class="calt-month-qa-row" data-month="' + esc(groupKey) + '" data-prefill-month="' + esc(gkMonth) + '" data-prefill-year="' + esc(gkYear) + '">'
+          + '<input class="calt-qa-day" type="text" inputmode="numeric" placeholder="Д" maxlength="5">'
+          + '<input class="calt-qa-txt" type="text" placeholder="Быстрое событие…">'
+          + '<button class="calt-qa-btn" title="Добавить">+</button>'
+          + '</div>'
           + '</div></div>';
       });
     }
@@ -2378,17 +2432,16 @@
 
     // ── Navigate / collapse ───────────────────────────────────────────────
     $('#calt_goto_current').off('click').on('click', () => {
-      const cm = currentMonth(); if (!cm) return;
+      const cmY = currentMonthYear(); if (!cmY) return;
       _collapsedMonths = {}; renderTabContent();
-      // Wait for slideDown animation (160ms) to fully complete before scrolling
       setTimeout(() => {
-        const $h = $('.calt-month-hdr[data-month="' + cm + '"]');
+        const $h = $('.calt-month-hdr[data-month="' + cmY + '"]');
         if ($h.length) $h[0].scrollIntoView({ behavior:'smooth', block:'start' });
       }, 200);
     });
     $('#calt_collapse_all').off('click').on('click', () => {
-      const months = [...new Set(getSettings().keyEvents.map(e => extractMonth(e.date) || '— Без даты'))];
-      months.forEach(m => { _collapsedMonths[m] = true; });
+      const keys = [...new Set(getSettings().keyEvents.map(e => extractMonthYear(e.date) || '— Без даты'))];
+      keys.forEach(k => { _collapsedMonths[k] = true; });
       renderTabContent();
     });
     $('#calt_expand_all').off('click').on('click', () => { _collapsedMonths = {}; renderTabContent(); });
@@ -2448,6 +2501,26 @@
         saveSummarySnap(month);
         save(); renderTabContent(); toast('Саммери для ' + month + ' готово', '#a78bfa');
       } catch(err) { toast('Ошибка: ' + err.message, '#f87171'); $btn.prop('disabled',false).text('✦'); }
+    });
+
+    // ── Quick-add row inside month groups ────────────────────────────────
+    $(document).off('click.calt_qa').on('click.calt_qa', '.calt-qa-btn', function() {
+      const $row   = $(this).closest('.calt-month-qa-row');
+      const month  = $row.data('prefill-month');
+      const year   = $row.data('prefill-year');
+      const day    = $row.find('.calt-qa-day').val().trim();
+      const text   = $row.find('.calt-qa-txt').val().trim();
+      if (!text) { $row.find('.calt-qa-txt').focus(); return; }
+      const date   = buildDateString(day, month, year);
+      const s      = getSettings();
+      s.keyEvents.push({ id:s.nextEventId++, date, text, pinned:false, tags:[], hidden:false });
+      save(); updatePrompt(); updateMeta();
+      $row.find('.calt-qa-day').val('');
+      $row.find('.calt-qa-txt').val('');
+      renderTabContent();
+    });
+    $(document).off('keydown.calt_qa').on('keydown.calt_qa', '.calt-qa-txt', function(e) {
+      if (e.key === 'Enter') $(this).closest('.calt-month-qa-row').find('.calt-qa-btn').click();
     });
 
     // ── Inline edit ───────────────────────────────────────────────────────
