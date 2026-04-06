@@ -336,11 +336,10 @@
   // Human-readable "days ago" label for UI
   function daysAgoLabel(daysAgo) {
     if (daysAgo === null) return '';
-    if (daysAgo < 0)  return '';           // future events — no label
+    if (daysAgo < 0)   return '';
     if (daysAgo === 0) return 'сегодня';
     if (daysAgo === 1) return 'вчера';
-    if (daysAgo <= 60) return '~' + daysAgo + ' дн назад';
-    return '';  // too far back — covered by month grouping / summaries
+    return '~' + daysAgo + ' дн назад';
   }
 
   // Compact label for prompt injection — English, concise
