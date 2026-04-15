@@ -701,3 +701,21 @@ body.calt-body-locked {
     overflow-y:auto; -webkit-overflow-scrolling:touch;
   }
 }
+
+/* ── Inline summary in collapsed month header ───────────────── */
+.calt-month-summ-inline {
+  flex: 1; min-width: 0;
+  font-size: 10px; color: #60a5fa; font-style: italic;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  cursor: pointer; padding: 0 4px;
+  transition: color 0.15s;
+}
+.calt-month-summ-inline:hover { color: #93c5fd; }
+.calt-month-summ-inline-empty {
+  color: #2d3b55 !important;
+  font-style: normal;
+}
+/* Small outdated dot inside inline summary */
+.calt-summ-outdated-dot {
+  font-size: 9px; color: #f87171; font-style: normal;
+}

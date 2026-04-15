@@ -2011,21 +2011,34 @@
       });
 
       order.forEach(groupKey => {
-        const hot = isMonthHot(groupKey), coll = !!_collapsedMonths[groupKey];
+        const hot = isMonthHot(groupKey);
+        // Past months collapsed by default unless user explicitly expanded them
+        // _collapsedMonths[key] = true → collapsed, false → expanded, undefined → use default
+        const userSet = _collapsedMonths[groupKey];
+        const coll = userSet !== undefined ? userSet : !hot; // past=collapsed, current=open by default
         const summ = s.monthSummaries[groupKey] || '';
         const outdated = isSummaryOutdated(groupKey);
-        const outdatedBadge = (outdated && summ)
-          ? '<span class="calt-summ-outdated" title="Добавлены новые события">⚠ устарело</span>' : '';
 
         // Parse month name and year from group key for quick-add prefill
         const gkParts = groupKey.split(' ');
         const gkYear  = /^\d+$/.test(gkParts[gkParts.length - 1]) ? gkParts[gkParts.length - 1] : '';
         const gkMonth = gkYear ? gkParts.slice(0, -1).join(' ') : groupKey;
 
+        // Inline summary preview — shown in header when collapsed (past months)
+        const summPreview = (!hot && summ)
+          ? '<span class="calt-month-summ-inline" data-month="' + esc(groupKey) + '" title="' + esc(summ) + '">'
+            + esc(summ.length > 72 ? summ.slice(0, 70) + '…' : summ)
+            + (outdated ? ' <span class="calt-summ-outdated-dot" title="Новые события">⚠</span>' : '')
+            + '</span>'
+          : (!hot && !summ
+            ? '<span class="calt-month-summ-inline calt-month-summ-inline-empty" data-month="' + esc(groupKey) + '">нет саммери</span>'
+            : '');
+
         listHtml += '<div class="calt-month-group">'
           + '<div class="calt-month-hdr" data-month="' + esc(groupKey) + '">'
           + '<span class="calt-month-chev">' + (coll?'▸':'▾') + '</span>'
           + '<span class="calt-month-name">' + esc(groupKey) + '</span>'
+          + summPreview
           + (hot
             ? '<span class="calt-layer-badge calt-layer-hot calt-layer-toggle" data-month="' + esc(groupKey) + '" title="Нажмите — пометить как прошлый">● текущий</span>'
             : '<span class="calt-layer-badge calt-layer-warm calt-layer-toggle" data-month="' + esc(groupKey) + '" title="Нажмите — пометить как текущий">● прошлый</span>')
@@ -2034,16 +2047,7 @@
           + (!hot ? '<button class="calt-summ-gen-btn" data-month="' + esc(groupKey) + '" title="AI саммери">✦</button>' : '')
           + '</div>';
 
-        if (!hot) {
-          listHtml += '<div class="calt-month-summ-row" data-month="' + esc(groupKey) + '">'
-            + (summ
-              ? '<span class="calt-summ-text" data-month="' + esc(groupKey) + '">' + esc(summ) + '</span>' + outdatedBadge
-              : '<span class="calt-summ-empty" data-month="' + esc(groupKey) + '">нет саммери — кликните или нажмите ✦</span>')
-            + '</div>';
-        }
-
         // Quick-add row — pre-filled with this group's month and year
-        const qaId = 'calt_qa_' + groupKey.replace(/[^a-z0-9]/gi, '_');
         listHtml += '<div class="calt-month-body"' + (coll?' style="display:none"':'') + '>'
           + groups[groupKey].map(e => eventRow(e,'event')).join('')
           + '<div class="calt-month-qa-row" data-month="' + esc(groupKey) + '" data-prefill-month="' + esc(gkMonth) + '" data-prefill-year="' + esc(gkYear) + '">'
@@ -2462,7 +2466,7 @@
 
     // ── Month group toggle ────────────────────────────────────────────────
     $('.calt-month-hdr').off('click').on('click', function(e) {
-      if ($(e.target).closest('.calt-summ-gen-btn,.calt-layer-toggle').length) return;
+      if ($(e.target).closest('.calt-summ-gen-btn,.calt-layer-toggle,.calt-month-summ-inline').length) return;
       const month = $(this).data('month');
       _collapsedMonths[month] = !_collapsedMonths[month];
       $(this).closest('.calt-month-group').find('.calt-month-body')
@@ -2487,7 +2491,8 @@
     });
 
     // ── Summary ───────────────────────────────────────────────────────────
-    $('.calt-summ-text,.calt-summ-empty').off('click').on('click', function() {
+    $('.calt-summ-text,.calt-summ-empty,.calt-month-summ-inline').off('click').on('click', function(e) {
+      e.stopPropagation();
       openSummaryEdit($(this).data('month'));
     });
     $('.calt-summ-gen-btn').off('click').on('click', async function(e) {
